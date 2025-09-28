@@ -1,0 +1,10 @@
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+cd ~
+git clone https://github.com/flutter/flutter.git -b stable
+
+export PATH="$PATH:`pwd`/flutter/bin"
+
+flutter doctor
