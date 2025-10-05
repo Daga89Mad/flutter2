@@ -22,6 +22,29 @@ class FirebaseCrudService {
     return double.tryParse(raw.toString()) ?? 0.0;
   }
 
+  /// Inicia sesión con email y contraseña.
+  /// Lanza FirebaseAuthException en caso de error.
+  Future<UserCredential> signInWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    // Opcional: forzar idioma para mensajes de Firebase
+    _auth.setLanguageCode('es');
+
+    try {
+      final credential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      return credential;
+    } on FirebaseAuthException {
+      rethrow;
+    } catch (e) {
+      // Envuelve errores no esperados en una Exception legible
+      throw Exception('Error al iniciar sesión: $e');
+    }
+  }
+
   /// Registra un usuario con email y contraseña
   /// Lanza Exception con mensaje legible si hay error
   Future<UserCredential> registerWithEmail({
@@ -148,6 +171,75 @@ class FirebaseCrudService {
         .collection('Grupos')
         .get();
     return snap.docs.map((d) => d.id).toList();
+  }
+
+  Future<void> createGroupAndAddMember({
+    required String groupName,
+    required String groupCode,
+    required String adminUid,
+    required String memberUid,
+    required String alias,
+    required double initialCapital,
+  }) async {
+    final WriteBatch batch = _db.batch();
+
+    // 1) Documento del grupo
+    final DocumentReference groupRef = _db.collection('Grupos').doc();
+    final String groupId = groupRef.id;
+
+    final Map<String, dynamic> groupData = {
+      'NombreGrupo': groupName,
+      'CodigoGrupo': groupCode,
+      'TodosAdministradores': true,
+      'UidAdministrador': adminUid,
+      'UidAdministrador2': '',
+      'UidAdministrador3': '',
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    batch.set(groupRef, groupData);
+
+    // Timestamp de unión en UTC
+    final Timestamp joinedAt = Timestamp.fromDate(DateTime.now().toUtc());
+
+    // 2) Documento del miembro en Miembrosgrupos/{groupId}/Personas/{memberUid}
+    final DocumentReference memberRef = _db
+        .collection('MiembrosGrupos')
+        .doc(groupId)
+        .collection('Personas')
+        .doc(memberUid);
+
+    final Map<String, dynamic> memberData = {
+      'Alias': alias,
+      'CapitalInicial': initialCapital,
+      'joinedAt': joinedAt,
+    };
+    batch.set(memberRef, memberData, SetOptions(merge: true));
+
+    // 3) Registro inverso en Personas/Buscar/{memberUid}/Grupos/{groupId}
+    final DocumentReference inverseRef = _db
+        .collection('Personas')
+        .doc(memberUid)
+        .collection('Grupos')
+        .doc(groupId);
+
+    final DocumentReference inverseRefSimple = _db
+        .collection('Personas')
+        .doc(memberUid)
+        .collection('Grupos')
+        .doc(groupId);
+
+    // Preparamos los datos que quieres guardar ahí
+    final Map<String, dynamic> inverseData = {
+      'Alias': alias,
+      'CapitalInicial': initialCapital,
+      'NombreGrupo': groupName,
+      'joinedAt': joinedAt,
+    };
+
+    // Usamos inverseRefSimple para que la estructura quede clara y funcional
+    batch.set(inverseRefSimple, inverseData, SetOptions(merge: true));
+
+    await batch.commit();
   }
 
   Future<List<Group>> getUserGroups(String uid) async {

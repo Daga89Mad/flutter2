@@ -67,14 +67,21 @@ class _BetScreenState extends State<BetScreen> {
       return;
     }
 
-    double cantidad;
-    double cuota;
-    try {
-      cantidad = double.parse(_cantidadController.text.trim());
-      cuota = double.parse(_cuotaController.text.trim());
-    } catch (e) {
+    double? cantidad;
+    double? cuota;
+
+    // Normaliza coma decimal y parsea de forma segura
+    String rawCantidad = _cantidadController.text.trim().replaceAll(',', '.');
+    String rawCuota = _cuotaController.text.trim().replaceAll(',', '.');
+
+    cantidad = double.tryParse(rawCantidad);
+    cuota = double.tryParse(rawCuota);
+
+    if (cantidad == null || cuota == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cantidad y cuota deben ser números')),
+        const SnackBar(
+          content: Text('Cantidad y cuota deben ser números válidos'),
+        ),
       );
       return;
     }
@@ -90,15 +97,11 @@ class _BetScreenState extends State<BetScreen> {
         cuota: cuota,
       );
 
-      // 1) Mostramos SnackBar de confirmación
       final snackBarController = ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Apuesta guardada correctamente')),
       );
 
-      // 2) Esperamos a que el SnackBar desaparezca (opcional)
       await snackBarController.closed;
-
-      // 3) Cerramos la pantalla devolviendo 'true'
       Navigator.of(context).pop(true);
     } catch (e) {
       ScaffoldMessenger.of(

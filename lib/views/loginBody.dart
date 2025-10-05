@@ -57,15 +57,16 @@ class _LoginBodyState extends State<LoginBody> {
     });
 
     try {
-      // Llamada al método de login
-      await _authService.registerWithEmail(
+      // Intentar iniciar sesión (no registrar)
+      // Asumo que tu FirebaseCrudService tiene un método signInWithEmail,
+      // si no, puedes usar directamente FirebaseAuth.instance.signInWithEmailAndPassword
+      await _authService.signInWithEmail(
         email: _emailCtrl.text.trim(),
         password: _passCtrl.text,
       );
 
       final prefs = await SharedPreferences.getInstance();
 
-      // Gestión de “Recuérdame”
       if (_remember) {
         await prefs.setBool('remember_me', true);
         await prefs.setString('saved_email', _emailCtrl.text.trim());
@@ -81,7 +82,35 @@ class _LoginBodyState extends State<LoginBody> {
         context,
       ).pushReplacement(MaterialPageRoute(builder: (_) => const MenuScreen()));
     } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = e.message);
+      // Manejo de errores más granular
+      switch (e.code) {
+        case 'user-not-found':
+          setState(
+            () => _errorMessage = 'No existe una cuenta con ese correo.',
+          );
+          break;
+        case 'wrong-password':
+          setState(() => _errorMessage = 'Contraseña incorrecta.');
+          break;
+        case 'user-disabled':
+          setState(() => _errorMessage = 'Cuenta deshabilitada.');
+          break;
+        case 'invalid-email':
+          setState(() => _errorMessage = 'Correo inválido.');
+          break;
+        case 'email-already-in-use':
+          setState(
+            () => _errorMessage =
+                'El correo ya está en uso. ¿Quieres registrarte con otro o recuperar la contraseña?',
+          );
+          break;
+        default:
+          setState(
+            () => _errorMessage = e.message ?? 'Error de autenticación.',
+          );
+      }
+    } catch (e) {
+      setState(() => _errorMessage = 'Error inesperado: $e');
     } finally {
       setState(() => _isLoading = false);
     }
