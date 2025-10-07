@@ -46,7 +46,7 @@ class _LoginBodyState extends State<LoginBody> {
 
     if (savedEmail != null) _emailCtrl.text = savedEmail;
     if (savedPass != null) _passCtrl.text = savedPass;
-
+    if (!mounted) return;
     setState(() => _remember = true);
   }
 
@@ -112,6 +112,7 @@ class _LoginBodyState extends State<LoginBody> {
     } catch (e) {
       setState(() => _errorMessage = 'Error inesperado: $e');
     } finally {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }

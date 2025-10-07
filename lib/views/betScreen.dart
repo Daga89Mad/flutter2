@@ -67,15 +67,12 @@ class _BetScreenState extends State<BetScreen> {
       return;
     }
 
-    double? cantidad;
-    double? cuota;
-
     // Normaliza coma decimal y parsea de forma segura
-    String rawCantidad = _cantidadController.text.trim().replaceAll(',', '.');
-    String rawCuota = _cuotaController.text.trim().replaceAll(',', '.');
+    final rawCantidad = _cantidadController.text.trim().replaceAll(',', '.');
+    final rawCuota = _cuotaController.text.trim().replaceAll(',', '.');
 
-    cantidad = double.tryParse(rawCantidad);
-    cuota = double.tryParse(rawCuota);
+    final cantidad = double.tryParse(rawCantidad);
+    final cuota = double.tryParse(rawCuota);
 
     if (cantidad == null || cuota == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -87,7 +84,8 @@ class _BetScreenState extends State<BetScreen> {
     }
 
     try {
-      await _service.placeBet(
+      // 1) Crear apuesta y obtener DocumentReference
+      final betRef = await _service.placeBet(
         groupId: widget.groupId,
         userId: widget.uid,
         matchId: _selectedMatchId!,
@@ -97,11 +95,26 @@ class _BetScreenState extends State<BetScreen> {
         cuota: cuota,
       );
 
-      final snackBarController = ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Apuesta guardada correctamente')),
+      // 2) Leer resultado del partido
+      final matchSnap = await _service.getMatchResult(
+        league: _selectedLeague!,
+        jornada: _jornadaController.text.trim(),
+        matchId: _selectedMatchId!,
       );
 
-      await snackBarController.closed;
+      // 3) Si 'Empate' es true, actualizamos 'acierto' en la apuesta
+      if (matchSnap.exists) {
+        final data = matchSnap.data() as Map<String, dynamic>;
+        if (data['Empate'] == true) {
+          await betRef.update({'Acierto': true});
+        }
+      }
+
+      // 4) Feedback al usuario y regreso
+      final controller = ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Apuesta guardada correctamente')),
+      );
+      await controller.closed;
       Navigator.of(context).pop(true);
     } catch (e) {
       ScaffoldMessenger.of(

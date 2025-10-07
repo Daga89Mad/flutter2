@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:plantillalogin/core/firebaseCrudService.dart'; // Ajusta la ruta si tu servicio está en otro paquete
@@ -125,56 +126,102 @@ class _ResultsScreenState extends State<ResultsScreen> {
     }
   }
 
-  /// Guarda o actualiza en Firestore todos los partidos de _events
   Future<void> _saveToFirestore() async {
-    if (_events == null || _events!.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
 
-    final leagueCollection = _seleccion == 'España' ? 'LaLiga' : 'SerieA';
-    final jornada = _roundController.text.trim();
-    final service = FirebaseCrudService();
-
-    for (var ev in _events!) {
-      final home = ev['strHomeTeam'] as String? ?? '';
-      final away = ev['strAwayTeam'] as String? ?? '';
-      final hScore = ev['intHomeScore']?.toString() ?? '';
-      final aScore = ev['intAwayScore']?.toString() ?? '';
-
-      final empate = hScore.isNotEmpty && aScore.isNotEmpty && hScore == aScore;
-      final victoriaLocal =
-          hScore.isNotEmpty &&
-          aScore.isNotEmpty &&
-          int.parse(hScore) > int.parse(aScore);
-      final victoriaVisitante =
-          hScore.isNotEmpty &&
-          aScore.isNotEmpty &&
-          int.parse(aScore) > int.parse(hScore);
-
-      final data = {
-        'Empate': empate,
-        'VictoriaLocal': victoriaLocal,
-        'VictoriaVisitante': victoriaVisitante,
-        'GolesLocal': hScore,
-        'GolesVisitante': aScore,
-        'Local': home,
-        'Visitante': away,
-        'Jornada': jornada,
-      };
-
-      // Usamos el upsert en lugar de createMatch
-      await service.upsertMatch(
-        league: leagueCollection,
-        jornada: jornada,
-        data: data,
-        local: home,
-        visitante: away,
+    // 1) Validación inicial
+    if (_events == null || _events!.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('No hay eventos para guardar')),
       );
+      return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Datos guardados/actualizados en Firestore'),
-      ),
-    );
+    final league = _seleccion == 'España' ? 'LaLiga' : 'SerieA';
+    final jornada = _roundController.text.trim();
+    final userUid = FirebaseAuth.instance.currentUser!.uid;
+    final service = FirebaseCrudService();
+
+    try {
+      // 2) Feedback: arrancamos
+      messenger.showSnackBar(
+        SnackBar(content: Text('Guardando jornada $jornada en $league…')),
+      );
+
+      // 3) Upsert de todos los partidos en Firestore
+      for (final ev in _events!) {
+        final home = ev['strHomeTeam'] as String? ?? '';
+        final away = ev['strAwayTeam'] as String? ?? '';
+        final hScore = ev['intHomeScore']?.toString() ?? '';
+        final aScore = ev['intAwayScore']?.toString() ?? '';
+
+        final empate =
+            hScore.isNotEmpty && aScore.isNotEmpty && hScore == aScore;
+        final victoriaLocal =
+            hScore.isNotEmpty &&
+            aScore.isNotEmpty &&
+            int.parse(hScore) > int.parse(aScore);
+        final victoriaVisitante =
+            hScore.isNotEmpty &&
+            aScore.isNotEmpty &&
+            int.parse(aScore) > int.parse(hScore);
+
+        final data = {
+          'Empate': empate,
+          'VictoriaLocal': victoriaLocal,
+          'VictoriaVisitante': victoriaVisitante,
+          'GolesLocal': hScore,
+          'GolesVisitante': aScore,
+          'Local': home,
+          'Visitante': away,
+          'Jornada': jornada,
+        };
+
+        await service.upsertMatch(
+          league: league,
+          jornada: jornada,
+          data: data,
+          local: home,
+          visitante: away,
+        );
+      }
+
+      // 4) Recuperar todos los grupos del usuario
+      final groups = await service.getUserGroups(userUid);
+      if (groups.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No perteneces a ningún grupo')),
+        );
+        return;
+      }
+
+      // 5) Para cada grupo, actualizamos sus apuestas
+      for (final group in groups) {
+        // obtener los miembros y extraer sólo sus UIDs
+        final members = await service.getGroupMembersWithStats(group.id);
+        final memberUids = members.map((m) => m.uid).toList();
+
+        await service.updateAciertosForGroup(
+          league: league,
+          jornada: jornada,
+          groupId: group.id,
+          memberUids: memberUids,
+        );
+      }
+
+      // 6) Feedback de éxito final
+      await messenger
+          .showSnackBar(
+            const SnackBar(
+              content: Text('Jornada guardada y aciertos actualizados'),
+            ),
+          )
+          .closed;
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Error al guardar jornada: $e')),
+      );
+    }
   }
 
   @override

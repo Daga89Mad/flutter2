@@ -20,4 +20,8 @@ class BetDetail {
     required this.local,
     required this.visitante,
   });
+  @override
+  String toString() {
+    return 'BetDetail(id: $id, acierto: $acierto, description: $cantidad)';
+  }
 }

@@ -295,6 +295,7 @@ class FirebaseCrudService {
 
         if (acierto) {
           ganancias += cantidad * cuota;
+          perdidas += cantidad;
         } else {
           perdidas += cantidad;
         }
@@ -409,7 +410,8 @@ class FirebaseCrudService {
     }
   }
 
-  Future<void> placeBet({
+  /// Devuelve la referencia del documento de la apuesta creada.
+  Future<DocumentReference> placeBet({
     required String groupId,
     required String userId,
     required String matchId,
@@ -418,22 +420,41 @@ class FirebaseCrudService {
     required double amount,
     required double cuota,
   }) async {
-    final ref = _db
-        .collection('Apuestas')
-        .doc(groupId)
-        .collection('Personas')
-        .doc(userId)
-        .collection('Realizadas');
-
-    await ref.add({
+    final betData = {
       'MatchId': matchId,
       'Liga': league,
       'Jornada': jornada,
       'Cantidad': amount,
       'Cuota': cuota,
-      'Acierto': false,
       'FechaApuesta': FieldValue.serverTimestamp(),
-    });
+      'Acierto': false, // valor por defecto
+    };
+
+    final ref = await _db
+        .collection('Apuestas')
+        .doc(groupId)
+        .collection('Personas')
+        .doc(userId)
+        .collection('Realizadas')
+        .add(betData);
+
+    return ref;
+  }
+
+  /// Recupera el documento de un partido concreto.
+  Future<DocumentSnapshot> getMatchResult({
+    required String league,
+    required String jornada,
+    required String matchId,
+  }) {
+    return _db
+        .collection(league)
+        .doc('Resultados')
+        .collection('Jornadas')
+        .doc(jornada)
+        .collection('Partidos')
+        .doc(matchId)
+        .get();
   }
 
   Future<void> updateAciertosForGroup({
@@ -445,11 +466,13 @@ class FirebaseCrudService {
     final partidosSnap = await _matchesRef(league, jornada).get();
     final batch = _db.batch();
 
-    for (var pdoc in partidosSnap.docs) {
+    for (final pdoc in partidosSnap.docs) {
       final matchId = pdoc.id;
-      final resultadoFirestore = pdoc.get('Empate');
 
-      for (var uid in memberUids) {
+      // Extraemos el campo 'Empate' con get(): nunca será null aquí
+      final isDraw = pdoc.get('Empate') as bool;
+
+      for (final uid in memberUids) {
         final colRealizadas = _db
             .collection('Apuestas')
             .doc(groupId)
@@ -461,10 +484,11 @@ class FirebaseCrudService {
             .where('MatchId', isEqualTo: matchId)
             .get();
 
-        for (var betDoc in querySnap.docs) {
-          final currentAcierto = betDoc.get('Acierto');
-          if (currentAcierto != resultadoFirestore) {
-            batch.update(betDoc.reference, {'Acierto': resultadoFirestore});
+        for (final betDoc in querySnap.docs) {
+          // Idem para 'Acierto'
+          final currentAcierto = betDoc.get('Acierto') as bool;
+          if (currentAcierto != isDraw) {
+            batch.update(betDoc.reference, {'Acierto': isDraw});
           }
         }
       }
