@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:plantillalogin/views/BetListScreen.dart';
 import 'package:plantillalogin/views/betScreen.dart';
+import 'package:plantillalogin/views/transferListScreen.dart';
 import 'package:plantillalogin/views/transferScreen.dart';
 
 import '../core/firebaseCrudService.dart';
@@ -198,7 +199,60 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                       child: ElevatedButton.icon(
                         onPressed: _selectedGroupId == null
                             ? null
-                            : _goToMyBets,
+                            : () async {
+                                // 1) Mostrar indicador de carga mientras obtenemos miembros
+                                showDialog(
+                                  context: context,
+                                  barrierDismissible: false,
+                                  builder: (_) => const Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                );
+
+                                try {
+                                  // 2) Obtener uid del usuario actual y lista de miembros
+                                  final currentUid =
+                                      FirebaseAuth.instance.currentUser!.uid;
+                                  final List<GroupMember> membersOfGroup =
+                                      await _service.getGroupMembersWithStats(
+                                        _selectedGroupId!,
+                                      );
+
+                                  // 3) Cerrar el diálogo de carga antes de navegar
+                                  if (Navigator.canPop(context))
+                                    Navigator.of(context).pop();
+
+                                  // 4) Navegar a la pantalla de listado pasando members para mostrar alias
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => TransferListScreen(
+                                        groupId: _selectedGroupId!,
+                                        members: membersOfGroup,
+                                      ),
+                                    ),
+                                  );
+
+                                  // 5) Al volver, refrescar miembros/estado si lo necesitas
+                                  setState(() {
+                                    _membersFuture = _service
+                                        .getGroupMembersWithStats(
+                                          _selectedGroupId!,
+                                        );
+                                  });
+                                } catch (e) {
+                                  // 6) Si hay error, cerrar diálogo y mostrar mensaje
+                                  if (Navigator.canPop(context))
+                                    Navigator.of(context).pop();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error cargando miembros: $e',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
                         icon: const Icon(Icons.list),
                         label: const Text('Ver Traspasos'),
                       ),
