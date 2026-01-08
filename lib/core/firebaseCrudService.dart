@@ -22,29 +22,6 @@ class FirebaseCrudService {
     return double.tryParse(raw.toString()) ?? 0.0;
   }
 
-  /// Inicia sesión con email y contraseña.
-  /// Lanza FirebaseAuthException en caso de error.
-  Future<UserCredential> signInWithEmail({
-    required String email,
-    required String password,
-  }) async {
-    // Opcional: forzar idioma para mensajes de Firebase
-    _auth.setLanguageCode('es');
-
-    try {
-      final credential = await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      return credential;
-    } on FirebaseAuthException {
-      rethrow;
-    } catch (e) {
-      // Envuelve errores no esperados en una Exception legible
-      throw Exception('Error al iniciar sesión: $e');
-    }
-  }
-
   /// Registra un usuario con email y contraseña
   /// Lanza Exception con mensaje legible si hay error
   Future<UserCredential> registerWithEmail({
@@ -173,75 +150,6 @@ class FirebaseCrudService {
     return snap.docs.map((d) => d.id).toList();
   }
 
-  Future<void> createGroupAndAddMember({
-    required String groupName,
-    required String groupCode,
-    required String adminUid,
-    required String memberUid,
-    required String alias,
-    required double initialCapital,
-  }) async {
-    final WriteBatch batch = _db.batch();
-
-    // 1) Documento del grupo
-    final DocumentReference groupRef = _db.collection('Grupos').doc();
-    final String groupId = groupRef.id;
-
-    final Map<String, dynamic> groupData = {
-      'NombreGrupo': groupName,
-      'CodigoGrupo': groupCode,
-      'TodosAdministradores': true,
-      'UidAdministrador': adminUid,
-      'UidAdministrador2': '',
-      'UidAdministrador3': '',
-      'createdAt': FieldValue.serverTimestamp(),
-    };
-    batch.set(groupRef, groupData);
-
-    // Timestamp de unión en UTC
-    final Timestamp joinedAt = Timestamp.fromDate(DateTime.now().toUtc());
-
-    // 2) Documento del miembro en Miembrosgrupos/{groupId}/Personas/{memberUid}
-    final DocumentReference memberRef = _db
-        .collection('MiembrosGrupos')
-        .doc(groupId)
-        .collection('Personas')
-        .doc(memberUid);
-
-    final Map<String, dynamic> memberData = {
-      'Alias': alias,
-      'CapitalInicial': initialCapital,
-      'joinedAt': joinedAt,
-    };
-    batch.set(memberRef, memberData, SetOptions(merge: true));
-
-    // 3) Registro inverso en Personas/Buscar/{memberUid}/Grupos/{groupId}
-    final DocumentReference inverseRef = _db
-        .collection('Personas')
-        .doc(memberUid)
-        .collection('Grupos')
-        .doc(groupId);
-
-    final DocumentReference inverseRefSimple = _db
-        .collection('Personas')
-        .doc(memberUid)
-        .collection('Grupos')
-        .doc(groupId);
-
-    // Preparamos los datos que quieres guardar ahí
-    final Map<String, dynamic> inverseData = {
-      'Alias': alias,
-      'CapitalInicial': initialCapital,
-      'NombreGrupo': groupName,
-      'joinedAt': joinedAt,
-    };
-
-    // Usamos inverseRefSimple para que la estructura quede clara y funcional
-    batch.set(inverseRefSimple, inverseData, SetOptions(merge: true));
-
-    await batch.commit();
-  }
-
   Future<List<Group>> getUserGroups(String uid) async {
     final ids = await getUserGroupIds(uid);
     final docs = await Future.wait(
@@ -295,10 +203,39 @@ class FirebaseCrudService {
 
         if (acierto) {
           ganancias += cantidad * cuota;
-          perdidas += cantidad;
         } else {
           perdidas += cantidad;
         }
+      }
+      final transferSend = await _db
+          .collection('Traspasos')
+          .doc(groupId)
+          .collection('Personas')
+          .doc(uid)
+          .collection('Enviadas')
+          .get();
+
+      final transferReceived = await _db
+          .collection('Traspasos')
+          .doc(groupId)
+          .collection('Personas')
+          .doc(uid)
+          .collection('Recibidas')
+          .get();
+
+      double enviadas = 0.0;
+      double recepcionadas = 0.0;
+
+      for (var bdoc in transferSend.docs) {
+        final b = bdoc.data();
+        final cantidad = _parseDouble(b['Cantidad']);
+
+        enviadas += cantidad;
+      }
+      for (var bdoc in transferReceived.docs) {
+        final b = bdoc.data();
+        final cantidad = _parseDouble(b['Cantidad']);
+        recepcionadas += cantidad;
       }
 
       result.add(
@@ -307,6 +244,8 @@ class FirebaseCrudService {
           memberData: memberData,
           totalPerdidas: perdidas,
           totalGanancias: ganancias,
+          traspasosRecibidos: recepcionadas,
+          traspasosEnviados: enviadas,
         ),
       );
     }
@@ -410,8 +349,7 @@ class FirebaseCrudService {
     }
   }
 
-  /// Devuelve la referencia del documento de la apuesta creada.
-  Future<DocumentReference> placeBet({
+  Future<void> placeBet({
     required String groupId,
     required String userId,
     required String matchId,
@@ -420,41 +358,22 @@ class FirebaseCrudService {
     required double amount,
     required double cuota,
   }) async {
-    final betData = {
+    final ref = _db
+        .collection('Apuestas')
+        .doc(groupId)
+        .collection('Personas')
+        .doc(userId)
+        .collection('Realizadas');
+
+    await ref.add({
       'MatchId': matchId,
       'Liga': league,
       'Jornada': jornada,
       'Cantidad': amount,
       'Cuota': cuota,
+      'Acierto': false,
       'FechaApuesta': FieldValue.serverTimestamp(),
-      'Acierto': false, // valor por defecto
-    };
-
-    final ref = await _db
-        .collection('Apuestas')
-        .doc(groupId)
-        .collection('Personas')
-        .doc(userId)
-        .collection('Realizadas')
-        .add(betData);
-
-    return ref;
-  }
-
-  /// Recupera el documento de un partido concreto.
-  Future<DocumentSnapshot> getMatchResult({
-    required String league,
-    required String jornada,
-    required String matchId,
-  }) {
-    return _db
-        .collection(league)
-        .doc('Resultados')
-        .collection('Jornadas')
-        .doc(jornada)
-        .collection('Partidos')
-        .doc(matchId)
-        .get();
+    });
   }
 
   Future<void> updateAciertosForGroup({
@@ -466,13 +385,11 @@ class FirebaseCrudService {
     final partidosSnap = await _matchesRef(league, jornada).get();
     final batch = _db.batch();
 
-    for (final pdoc in partidosSnap.docs) {
+    for (var pdoc in partidosSnap.docs) {
       final matchId = pdoc.id;
+      final resultadoFirestore = pdoc.get('Empate');
 
-      // Extraemos el campo 'Empate' con get(): nunca será null aquí
-      final isDraw = pdoc.get('Empate') as bool;
-
-      for (final uid in memberUids) {
+      for (var uid in memberUids) {
         final colRealizadas = _db
             .collection('Apuestas')
             .doc(groupId)
@@ -484,16 +401,77 @@ class FirebaseCrudService {
             .where('MatchId', isEqualTo: matchId)
             .get();
 
-        for (final betDoc in querySnap.docs) {
-          // Idem para 'Acierto'
-          final currentAcierto = betDoc.get('Acierto') as bool;
-          if (currentAcierto != isDraw) {
-            batch.update(betDoc.reference, {'Acierto': isDraw});
+        for (var betDoc in querySnap.docs) {
+          final currentAcierto = betDoc.get('Acierto');
+          if (currentAcierto != resultadoFirestore) {
+            batch.update(betDoc.reference, {'Acierto': resultadoFirestore});
           }
         }
       }
     }
 
     await batch.commit();
+  }
+
+  /// Guarda un traspaso (doc auto-id) en Enviadas y Recibidas de Firestore.
+  /// Lanza Exception si hay error.
+  Future<void> createTransfer({
+    required String groupId,
+    required String senderUid,
+    required String receiverUid,
+    required double amount,
+    DateTime? date, // opcional, si no se pasa se usa DateTime.now()
+  }) async {
+    try {
+      final DateTime now = date ?? DateTime.now();
+      final Timestamp ts = Timestamp.fromDate(now);
+
+      // Referencias a las subcolecciones donde se crearán documentos auto-id
+      final CollectionReference senderEnviadas = _db
+          .collection('Traspasos')
+          .doc(groupId)
+          .collection('Personas')
+          .doc(senderUid)
+          .collection('Enviadas');
+
+      final CollectionReference receiverRecibidas = _db
+          .collection('Traspasos')
+          .doc(groupId)
+          .collection('Personas')
+          .doc(receiverUid)
+          .collection('Recibidas');
+
+      // Documentos con id automático
+      final DocumentReference senderDocRef = senderEnviadas.doc();
+      final DocumentReference receiverDocRef = receiverRecibidas.doc();
+
+      // Datos según convención solicitada
+      final Map<String, dynamic> sentData = {
+        'Cantidad': amount,
+        'Fecha': ts,
+        'IdReceptor': receiverUid,
+      };
+
+      final Map<String, dynamic> receivedData = {
+        'Cantidad': amount,
+        'Fecha': ts,
+        'IdEmisor': senderUid,
+      };
+
+      // Batch para atomicidad
+      final WriteBatch batch = _db.batch();
+      batch.set(senderDocRef, sentData);
+      batch.set(receiverDocRef, receivedData);
+
+      await batch.commit();
+
+      // Log (opcional)
+      print(
+        '✅ Traspaso guardado: $amount de $senderUid a $receiverUid en grupo $groupId',
+      );
+    } catch (e) {
+      print('❌ Error al guardar traspaso: $e');
+      throw Exception('Error guardando traspaso: $e');
+    }
   }
 }

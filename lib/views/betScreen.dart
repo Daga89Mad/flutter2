@@ -67,25 +67,20 @@ class _BetScreenState extends State<BetScreen> {
       return;
     }
 
-    // Normaliza coma decimal y parsea de forma segura
-    final rawCantidad = _cantidadController.text.trim().replaceAll(',', '.');
-    final rawCuota = _cuotaController.text.trim().replaceAll(',', '.');
-
-    final cantidad = double.tryParse(rawCantidad);
-    final cuota = double.tryParse(rawCuota);
-
-    if (cantidad == null || cuota == null) {
+    double cantidad;
+    double cuota;
+    try {
+      cantidad = double.parse(_cantidadController.text.trim());
+      cuota = double.parse(_cuotaController.text.trim());
+    } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cantidad y cuota deben ser números válidos'),
-        ),
+        const SnackBar(content: Text('Cantidad y cuota deben ser números')),
       );
       return;
     }
 
     try {
-      // 1) Crear apuesta y obtener DocumentReference
-      final betRef = await _service.placeBet(
+      await _service.placeBet(
         groupId: widget.groupId,
         userId: widget.uid,
         matchId: _selectedMatchId!,
@@ -95,26 +90,15 @@ class _BetScreenState extends State<BetScreen> {
         cuota: cuota,
       );
 
-      // 2) Leer resultado del partido
-      final matchSnap = await _service.getMatchResult(
-        league: _selectedLeague!,
-        jornada: _jornadaController.text.trim(),
-        matchId: _selectedMatchId!,
-      );
-
-      // 3) Si 'Empate' es true, actualizamos 'acierto' en la apuesta
-      if (matchSnap.exists) {
-        final data = matchSnap.data() as Map<String, dynamic>;
-        if (data['Empate'] == true) {
-          await betRef.update({'Acierto': true});
-        }
-      }
-
-      // 4) Feedback al usuario y regreso
-      final controller = ScaffoldMessenger.of(context).showSnackBar(
+      // 1) Mostramos SnackBar de confirmación
+      final snackBarController = ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Apuesta guardada correctamente')),
       );
-      await controller.closed;
+
+      // 2) Esperamos a que el SnackBar desaparezca (opcional)
+      await snackBarController.closed;
+
+      // 3) Cerramos la pantalla devolviendo 'true'
       Navigator.of(context).pop(true);
     } catch (e) {
       ScaffoldMessenger.of(

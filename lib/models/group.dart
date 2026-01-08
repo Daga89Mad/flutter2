@@ -3,4 +3,6 @@ class Group {
   final String nombre;
 
   Group({required this.id, required this.nombre});
+
+  get groupId => null;
 }

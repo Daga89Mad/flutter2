@@ -4,18 +4,13 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:plantillalogin/views/menu.dart';
 import 'firebase_options.dart';
-import 'views/loginBody.dart';
+import 'views/loginbody.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-  } catch (e) {
-    print('⚠️ Firebase init error: $e');
-  }
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const MyApp());
 }
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -67,7 +62,7 @@ class MyApp extends StatelessWidget {
               body: Center(child: CircularProgressIndicator()),
             );
           }
-          return snapshot.hasData ? MenuScreen() : const LoginBody();
+          return snapshot.hasData ? const MenuScreen() : const LoginBody();
         },
       ),
     );

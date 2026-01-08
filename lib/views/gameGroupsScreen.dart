@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:plantillalogin/views/BetListScreen.dart';
 import 'package:plantillalogin/views/betScreen.dart';
+import 'package:plantillalogin/views/transferScreen.dart';
 
 import '../core/firebaseCrudService.dart';
 import '../models/group.dart';
@@ -28,14 +29,6 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
     super.initState();
     final uid = FirebaseAuth.instance.currentUser!.uid;
     _groupsFuture = _service.getUserGroups(uid);
-  }
-
-  void _onGroupChanged(String? newGroupId) {
-    if (newGroupId == null) return;
-    setState(() {
-      _selectedGroupId = newGroupId;
-      _membersFuture = _service.getGroupMembersWithStats(newGroupId);
-    });
   }
 
   Future<void> _goToBetScreen() async {
@@ -100,28 +93,13 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
             children: [
               // Dropdown de selección de grupo
               Padding(
-                padding: const EdgeInsets.all(16),
-                child: DropdownButton<String>(
-                  isExpanded: true,
-                  value: _selectedGroupId,
-                  items: groups
-                      .map(
-                        (g) => DropdownMenuItem(
-                          value: g.id,
-                          child: Text(g.nombre),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: _onGroupChanged,
-                ),
-              ),
-
-              // Botones de acción
-              Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
                   children: [
-                    Expanded(
+                    SizedBox(
+                      width: 160,
                       child: ElevatedButton.icon(
                         onPressed: _selectedGroupId == null
                             ? null
@@ -130,14 +108,99 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                         label: const Text('Realizar apuesta'),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
+                    // Importa el modelo correcto arriba del archivo
+                    // Dentro del widget:
+                    SizedBox(
+                      width: 160,
+                      child: ElevatedButton.icon(
+                        onPressed: _selectedGroupId == null
+                            ? null
+                            : () async {
+                                // Mostrar indicador de carga
+                                showDialog(
+                                  context: context,
+                                  barrierDismissible: false,
+                                  builder: (_) => const Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                );
+
+                                try {
+                                  final currentUid =
+                                      FirebaseAuth.instance.currentUser!.uid;
+                                  final List<GroupMember> membersOfGroup =
+                                      await _service.getGroupMembersWithStats(
+                                        _selectedGroupId!,
+                                      );
+
+                                  // Cerrar el diálogo de carga antes de navegar
+                                  if (Navigator.canPop(context))
+                                    Navigator.of(context).pop();
+
+                                  // Navegar y esperar resultado al volver
+                                  final result = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => TransferScreen(
+                                        members: membersOfGroup,
+                                        groupId: _selectedGroupId!,
+                                        senderUid: currentUid,
+                                      ),
+                                    ),
+                                  );
+
+                                  // Si quieres refrescar la lista de miembros al volver (recomendado)
+                                  setState(() {
+                                    _membersFuture = _service
+                                        .getGroupMembersWithStats(
+                                          _selectedGroupId!,
+                                        );
+                                  });
+
+                                  // Opcional: manejar el resultado devuelto por TransferScreen
+                                  if (result != null &&
+                                      result is Map<String, dynamic>) {
+                                    debugPrint(
+                                      'Traspaso realizado: ${result['amount']} a ${result['receiverId']}',
+                                    );
+                                  }
+                                } catch (e) {
+                                  // Aseguramos cerrar el diálogo si hubo error
+                                  if (Navigator.canPop(context))
+                                    Navigator.of(context).pop();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error cargando miembros: $e',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+
+                        icon: const Icon(Icons.add),
+                        label: const Text('Realizar Traspaso'),
+                      ),
+                    ),
+
+                    SizedBox(
+                      width: 160,
                       child: ElevatedButton.icon(
                         onPressed: _selectedGroupId == null
                             ? null
                             : _goToMyBets,
                         icon: const Icon(Icons.list),
                         label: const Text('Ver mis apuestas'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 160,
+                      child: ElevatedButton.icon(
+                        onPressed: _selectedGroupId == null
+                            ? null
+                            : _goToMyBets,
+                        icon: const Icon(Icons.list),
+                        label: const Text('Ver Traspasos'),
                       ),
                     ),
                   ],
@@ -212,11 +275,15 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                             itemBuilder: (ctx3, i) {
                               final m = members[i];
                               final beneficio =
-                                  m.totalGanancias - m.totalPerdidas;
+                                  (m.totalGanancias - m.totalPerdidas) +
+                                  m.traspasosRecibidos -
+                                  m.traspasosEnviados;
                               // Asegúrate de que tu modelo GroupMember tenga
                               // un campo `capitalInicial`
                               final capitalIni = m.capitalInicial;
-
+                              final tRecibido = m.traspasosRecibidos;
+                              final tEnviado = m.traspasosEnviados;
+                              m.totalGanancias - m.totalPerdidas;
                               return Card(
                                 margin: const EdgeInsets.symmetric(
                                   horizontal: 16,
@@ -239,6 +306,11 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
+                                      const SizedBox(height: 4),
+                                      // Capital inicial
+                                      Text(
+                                        'Capital inicial: ${capitalIni.toStringAsFixed(2)}',
+                                      ),
                                       // Ganancias y apostado
                                       Row(
                                         mainAxisAlignment:
@@ -252,24 +324,46 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                           ),
                                         ],
                                       ),
-                                      const SizedBox(height: 4),
-                                      // Capital inicial
-                                      Text(
-                                        'Capital inicial: ${capitalIni.toStringAsFixed(2)}',
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            'T.Enviado: -${tEnviado.toStringAsFixed(2)}',
+                                            style: TextStyle(
+                                              color: Colors.red,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          Text(
+                                            'T.recibido: +${tRecibido.toStringAsFixed(2)}',
+                                            style: TextStyle(
+                                              color: Colors.green,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      const SizedBox(height: 4),
-                                      // Beneficio neto
-                                      Text(
-                                        'Beneficio: ${beneficio.toStringAsFixed(2)}',
-                                        style: TextStyle(
-                                          color: beneficio >= 0
-                                              ? Colors.green
-                                              : Colors.red,
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          //const SizedBox(height: 4),
+                                          // Beneficio neto
+                                          Text(
+                                            'Beneficio: ${beneficio.toStringAsFixed(2)}',
+                                            style: TextStyle(
+                                              color: beneficio >= 0
+                                                  ? Colors.green
+                                                  : Colors.red,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
+
                                   onTap: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(

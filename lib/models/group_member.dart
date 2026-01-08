@@ -6,6 +6,8 @@ class GroupMember {
   final double capitalInicial;
   final double totalPerdidas;
   final double totalGanancias;
+  final double traspasosRecibidos;
+  final double traspasosEnviados;
 
   GroupMember({
     required this.uid,
@@ -13,6 +15,8 @@ class GroupMember {
     required this.capitalInicial,
     required this.totalPerdidas,
     required this.totalGanancias,
+    required this.traspasosRecibidos,
+    required this.traspasosEnviados,
   });
 
   /// Crea instancia a partir de Map de MiembrosGrupos y stats
@@ -21,6 +25,8 @@ class GroupMember {
     required Map<String, dynamic> memberData,
     required double totalPerdidas,
     required double totalGanancias,
+    required double traspasosRecibidos,
+    required double traspasosEnviados,
   }) {
     return GroupMember(
       uid: uid,
@@ -28,6 +34,8 @@ class GroupMember {
       capitalInicial: (memberData['CapitalInicial'] as num?)?.toDouble() ?? 0.0,
       totalPerdidas: totalPerdidas,
       totalGanancias: totalGanancias,
+      traspasosRecibidos: traspasosRecibidos,
+      traspasosEnviados: traspasosEnviados,
     );
   }
 }

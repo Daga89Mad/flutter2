@@ -1,7 +1,5 @@
 // lib/views/bet_list_screen.dart
 
-import 'dart:developer';
-
 import 'package:flutter/material.dart';
 
 import '../core/firebaseCrudService.dart';
@@ -45,7 +43,6 @@ class _BetListScreenState extends State<BetListScreen> {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
           final bets = snapshot.data;
-          print('Valor de miVariable: $bets');
           if (bets == null || bets.isEmpty) {
             return const Center(child: Text('No hay apuestas realizadas aún.'));
           }
