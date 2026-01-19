@@ -1,10 +1,12 @@
 // lib/screens/game_groups_screen.dart
+//
+// Pantalla que muestra los grupos del usuario, permite cambiar de grupo
+// mediante un desplegable y navegar a apuestas, traspasos y listado de apuestas.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:plantillalogin/views/BetListScreen.dart';
 import 'package:plantillalogin/views/betScreen.dart';
-import 'package:plantillalogin/views/transferListScreen.dart';
 import 'package:plantillalogin/views/transferScreen.dart';
 
 import '../core/firebaseCrudService.dart';
@@ -84,7 +86,7 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
             return const Center(child: Text('No perteneces a ningún grupo'));
           }
 
-          // Inicializamos selección y miembros
+          // Inicializamos selección y miembros si aún no están
           _selectedGroupId ??= groups.first.id;
           _membersFuture ??= _service.getGroupMembersWithStats(
             _selectedGroupId!,
@@ -92,170 +94,169 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
 
           return Column(
             children: [
-              // Dropdown de selección de grupo
+              // Botones y desplegable de selección de grupo
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(
-                      width: 160,
-                      child: ElevatedButton.icon(
-                        onPressed: _selectedGroupId == null
-                            ? null
-                            : _goToBetScreen,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Realizar apuesta'),
-                      ),
-                    ),
-                    // Importa el modelo correcto arriba del archivo
-                    // Dentro del widget:
-                    SizedBox(
-                      width: 160,
-                      child: ElevatedButton.icon(
-                        onPressed: _selectedGroupId == null
-                            ? null
-                            : () async {
-                                // Mostrar indicador de carga
-                                showDialog(
-                                  context: context,
-                                  barrierDismissible: false,
-                                  builder: (_) => const Center(
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                );
-
-                                try {
-                                  final currentUid =
-                                      FirebaseAuth.instance.currentUser!.uid;
-                                  final List<GroupMember> membersOfGroup =
-                                      await _service.getGroupMembersWithStats(
-                                        _selectedGroupId!,
-                                      );
-
-                                  // Cerrar el diálogo de carga antes de navegar
-                                  if (Navigator.canPop(context))
-                                    Navigator.of(context).pop();
-
-                                  // Navegar y esperar resultado al volver
-                                  final result = await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => TransferScreen(
-                                        members: membersOfGroup,
-                                        groupId: _selectedGroupId!,
-                                        senderUid: currentUid,
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        SizedBox(
+                          width: 160,
+                          child: ElevatedButton.icon(
+                            onPressed: _selectedGroupId == null
+                                ? null
+                                : _goToBetScreen,
+                            icon: const Icon(Icons.add),
+                            label: const Text('Realizar apuesta'),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 160,
+                          child: ElevatedButton.icon(
+                            onPressed: _selectedGroupId == null
+                                ? null
+                                : () async {
+                                    // Mostrar indicador de carga
+                                    showDialog(
+                                      context: context,
+                                      barrierDismissible: false,
+                                      builder: (_) => const Center(
+                                        child: CircularProgressIndicator(),
                                       ),
-                                    ),
-                                  );
-
-                                  // Si quieres refrescar la lista de miembros al volver (recomendado)
-                                  setState(() {
-                                    _membersFuture = _service
-                                        .getGroupMembersWithStats(
-                                          _selectedGroupId!,
-                                        );
-                                  });
-
-                                  // Opcional: manejar el resultado devuelto por TransferScreen
-                                  if (result != null &&
-                                      result is Map<String, dynamic>) {
-                                    debugPrint(
-                                      'Traspaso realizado: ${result['amount']} a ${result['receiverId']}',
                                     );
-                                  }
-                                } catch (e) {
-                                  // Aseguramos cerrar el diálogo si hubo error
-                                  if (Navigator.canPop(context))
-                                    Navigator.of(context).pop();
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Error cargando miembros: $e',
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
 
-                        icon: const Icon(Icons.add),
-                        label: const Text('Realizar Traspaso'),
-                      ),
-                    ),
+                                    try {
+                                      final currentUid = FirebaseAuth
+                                          .instance
+                                          .currentUser!
+                                          .uid;
+                                      final List<GroupMember> membersOfGroup =
+                                          await _service
+                                              .getGroupMembersWithStats(
+                                                _selectedGroupId!,
+                                              );
 
-                    SizedBox(
-                      width: 160,
-                      child: ElevatedButton.icon(
-                        onPressed: _selectedGroupId == null
-                            ? null
-                            : _goToMyBets,
-                        icon: const Icon(Icons.list),
-                        label: const Text('Ver mis apuestas'),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 160,
-                      child: ElevatedButton.icon(
-                        onPressed: _selectedGroupId == null
-                            ? null
-                            : () async {
-                                // 1) Mostrar indicador de carga mientras obtenemos miembros
-                                showDialog(
-                                  context: context,
-                                  barrierDismissible: false,
-                                  builder: (_) => const Center(
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                );
+                                      // Cerrar el diálogo de carga antes de navegar
+                                      if (Navigator.canPop(context)) {
+                                        Navigator.of(context).pop();
+                                      }
 
-                                try {
-                                  // 2) Obtener uid del usuario actual y lista de miembros
-                                  final currentUid =
-                                      FirebaseAuth.instance.currentUser!.uid;
-                                  final List<GroupMember> membersOfGroup =
-                                      await _service.getGroupMembersWithStats(
-                                        _selectedGroupId!,
+                                      // Navegar y esperar resultado al volver
+                                      final result = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => TransferScreen(
+                                            members: membersOfGroup,
+                                            groupId: _selectedGroupId!,
+                                            senderUid: currentUid,
+                                          ),
+                                        ),
                                       );
 
-                                  // 3) Cerrar el diálogo de carga antes de navegar
-                                  if (Navigator.canPop(context))
-                                    Navigator.of(context).pop();
+                                      // Refrescar la lista de miembros al volver
+                                      setState(() {
+                                        _membersFuture = _service
+                                            .getGroupMembersWithStats(
+                                              _selectedGroupId!,
+                                            );
+                                      });
 
-                                  // 4) Navegar a la pantalla de listado pasando members para mostrar alias
-                                  await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => TransferListScreen(
-                                        groupId: _selectedGroupId!,
-                                        members: membersOfGroup,
-                                      ),
-                                    ),
-                                  );
-
-                                  // 5) Al volver, refrescar miembros/estado si lo necesitas
-                                  setState(() {
-                                    _membersFuture = _service
-                                        .getGroupMembersWithStats(
-                                          _selectedGroupId!,
+                                      // Manejar resultado opcional
+                                      if (result != null &&
+                                          result is Map<String, dynamic>) {
+                                        debugPrint(
+                                          'Traspaso realizado: ${result['amount']} a ${result['receiverId']}',
                                         );
-                                  });
-                                } catch (e) {
-                                  // 6) Si hay error, cerrar diálogo y mostrar mensaje
-                                  if (Navigator.canPop(context))
-                                    Navigator.of(context).pop();
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Error cargando miembros: $e',
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
-                        icon: const Icon(Icons.list),
-                        label: const Text('Ver Traspasos'),
-                      ),
+                                      }
+                                    } catch (e) {
+                                      // Aseguramos cerrar el diálogo si hubo error
+                                      if (Navigator.canPop(context)) {
+                                        Navigator.of(context).pop();
+                                      }
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'Error cargando miembros: $e',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  },
+                            icon: const Icon(Icons.swap_horiz),
+                            label: const Text('Realizar Traspaso'),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 160,
+                          child: ElevatedButton.icon(
+                            onPressed: _selectedGroupId == null
+                                ? null
+                                : _goToMyBets,
+                            icon: const Icon(Icons.list),
+                            label: const Text('Ver mis apuestas'),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 160,
+                          child: ElevatedButton.icon(
+                            onPressed: _selectedGroupId == null
+                                ? null
+                                : _goToMyBets,
+                            icon: const Icon(Icons.list_alt),
+                            label: const Text('Ver Traspasos'),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // Desplegable para seleccionar grupo
+                    Row(
+                      children: [
+                        const Text(
+                          'Grupo:',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: _selectedGroupId,
+                            items: groups.map((g) {
+                              // Ajusta g.name si tu modelo usa otro campo
+                              final displayName =
+                                  (g.nombre != null && g.nombre!.isNotEmpty)
+                                  ? g.nombre!
+                                  : 'Grupo ${g.id}';
+                              return DropdownMenuItem<String>(
+                                value: g.id,
+                                child: Text(displayName),
+                              );
+                            }).toList(),
+                            onChanged: (String? newId) {
+                              if (newId == null) return;
+                              setState(() {
+                                _selectedGroupId = newId;
+                                _membersFuture = _service
+                                    .getGroupMembersWithStats(newId);
+                              });
+                            },
+                            decoration: const InputDecoration(
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -332,12 +333,10 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                   (m.totalGanancias - m.totalPerdidas) +
                                   m.traspasosRecibidos -
                                   m.traspasosEnviados;
-                              // Asegúrate de que tu modelo GroupMember tenga
-                              // un campo `capitalInicial`
                               final capitalIni = m.capitalInicial;
                               final tRecibido = m.traspasosRecibidos;
                               final tEnviado = m.traspasosEnviados;
-                              m.totalGanancias - m.totalPerdidas;
+
                               return Card(
                                 margin: const EdgeInsets.symmetric(
                                   horizontal: 16,
@@ -384,14 +383,14 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                         children: [
                                           Text(
                                             'T.Enviado: -${tEnviado.toStringAsFixed(2)}',
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                               color: Colors.red,
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
                                           Text(
                                             'T.recibido: +${tRecibido.toStringAsFixed(2)}',
-                                            style: TextStyle(
+                                            style: const TextStyle(
                                               color: Colors.green,
                                               fontWeight: FontWeight.w600,
                                             ),
@@ -402,8 +401,6 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                         mainAxisAlignment:
                                             MainAxisAlignment.spaceBetween,
                                         children: [
-                                          //const SizedBox(height: 4),
-                                          // Beneficio neto
                                           Text(
                                             'Beneficio: ${beneficio.toStringAsFixed(2)}',
                                             style: TextStyle(
@@ -417,7 +414,6 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                       ),
                                     ],
                                   ),
-
                                   onTap: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
