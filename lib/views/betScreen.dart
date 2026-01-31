@@ -55,6 +55,12 @@ class _BetScreenState extends State<BetScreen> {
     }
   }
 
+  double? parseNumber(String text) {
+    final cleaned = text.trim().replaceAll('.', '').replaceAll(',', '.');
+    // Si usas separador de miles como '.', lo eliminamos; luego convertimos la coma decimal a punto.
+    return double.tryParse(cleaned);
+  }
+
   Future<void> _saveBet() async {
     if (_selectedLeague == null ||
         _selectedMatchId == null ||
@@ -67,12 +73,9 @@ class _BetScreenState extends State<BetScreen> {
       return;
     }
 
-    double cantidad;
-    double cuota;
-    try {
-      cantidad = double.parse(_cantidadController.text.trim());
-      cuota = double.parse(_cuotaController.text.trim());
-    } catch (e) {
+    final cantidad = parseNumber(_cantidadController.text);
+    final cuota = parseNumber(_cuotaController.text);
+    if (cantidad == null || cuota == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cantidad y cuota deben ser números')),
       );
