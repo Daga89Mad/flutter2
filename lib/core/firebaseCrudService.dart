@@ -165,6 +165,97 @@ class FirebaseCrudService {
     }).toList();
   }
 
+  /// Actualiza el campo 'Acierto' solo para las apuestas de un usuario concreto
+  /// en un grupo, comparando con el resultado ya guardado en la colección de partidos.
+  Future<void> updateAciertosForUser({
+    required String league,
+    required String jornada,
+    required String groupId,
+    required String userId,
+  }) async {
+    final partidosSnap = await _matchesRef(league, jornada).get();
+
+    final batch = _db.batch();
+    int updates = 0;
+
+    for (var pdoc in partidosSnap.docs) {
+      final matchId = pdoc.id;
+
+      // Intentamos leer el resultado del partido
+      final data = pdoc.data() as Map<String, dynamic>;
+      final bool hasResult =
+          data.containsKey('Empate') ||
+          data.containsKey('VictoriaLocal') ||
+          data.containsKey('VictoriaVisitante');
+
+      if (!hasResult) continue; // no hay resultado guardado, saltar
+
+      final bool empate = data['Empate'] as bool? ?? false;
+      final bool victoriaLocal = data['VictoriaLocal'] as bool? ?? false;
+      final bool victoriaVisitante =
+          data['VictoriaVisitante'] as bool? ?? false;
+
+      // Buscamos apuestas del usuario para este matchId
+      final colRealizadas = _db
+          .collection('Apuestas')
+          .doc(groupId)
+          .collection('Personas')
+          .doc(userId)
+          .collection('Realizadas');
+
+      final querySnap = await colRealizadas
+          .where('MatchId', isEqualTo: matchId)
+          .get();
+
+      for (var betDoc in querySnap.docs) {
+        final betData = betDoc.data() as Map<String, dynamic>;
+
+        // Determinar la selección del usuario si existe (varios nombres posibles)
+        String? pick =
+            betData['Pick']?.toString() ??
+            betData['Seleccion']?.toString() ??
+            betData['Tipo']?.toString();
+
+        // Calcular si la apuesta es correcta
+        bool nuevoAcierto = false;
+
+        if (pick != null && pick.isNotEmpty) {
+          final p = pick.toLowerCase();
+          if (p == 'empate' || p == 'draw' || p == 'x') {
+            nuevoAcierto = empate;
+          } else if (p == 'local' || p == 'home') {
+            nuevoAcierto = victoriaLocal;
+          } else if (p == 'visitante' || p == 'away') {
+            nuevoAcierto = victoriaVisitante;
+          } else {
+            // Si el formato de pick es distinto (por ejemplo "1", "2", "X"), intenta mapear:
+            if (p == '1') nuevoAcierto = victoriaLocal;
+            if (p == '2') nuevoAcierto = victoriaVisitante;
+            if (p == 'x' || p == 'x2' || p == '1x') {
+              // casos compuestos no manejados aquí; dejar false por defecto
+            }
+          }
+        } else {
+          // Si no hay pick guardado, por compatibilidad marcamos Acierto = Empate (comportamiento previo)
+          nuevoAcierto = empate;
+        }
+
+        final currentAcierto = betData['Acierto'] as bool? ?? false;
+        if (currentAcierto != nuevoAcierto) {
+          batch.update(betDoc.reference, {'Acierto': nuevoAcierto});
+          updates++;
+        }
+      }
+    }
+
+    if (updates > 0) {
+      await batch.commit();
+    } else {
+      // No hay cambios que aplicar
+      return;
+    }
+  }
+
   // ==================================================
   // 3) APUESTAS & MIEMBROS
   // ==================================================

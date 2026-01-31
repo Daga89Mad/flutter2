@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:plantillalogin/core/firebaseCrudService.dart'; // Ajusta la ruta si tu servicio está en otro paquete
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ResultsScreen extends StatefulWidget {
   const ResultsScreen({super.key});
@@ -129,52 +131,137 @@ class _ResultsScreenState extends State<ResultsScreen> {
   Future<void> _saveToFirestore() async {
     if (_events == null || _events!.isEmpty) return;
 
+    setState(() {
+      _cargando = true;
+      _error = null;
+    });
+
     final leagueCollection = _seleccion == 'España' ? 'LaLiga' : 'SerieA';
     final jornada = _roundController.text.trim();
     final service = FirebaseCrudService();
 
-    for (var ev in _events!) {
-      final home = ev['strHomeTeam'] as String? ?? '';
-      final away = ev['strAwayTeam'] as String? ?? '';
-      final hScore = ev['intHomeScore']?.toString() ?? '';
-      final aScore = ev['intAwayScore']?.toString() ?? '';
+    try {
+      // 1) Upsert de todos los partidos
+      for (var ev in _events!) {
+        final home = ev['strHomeTeam'] as String? ?? '';
+        final away = ev['strAwayTeam'] as String? ?? '';
+        final hScore = ev['intHomeScore']?.toString() ?? '';
+        final aScore = ev['intAwayScore']?.toString() ?? '';
 
-      final empate = hScore.isNotEmpty && aScore.isNotEmpty && hScore == aScore;
-      final victoriaLocal =
-          hScore.isNotEmpty &&
-          aScore.isNotEmpty &&
-          int.parse(hScore) > int.parse(aScore);
-      final victoriaVisitante =
-          hScore.isNotEmpty &&
-          aScore.isNotEmpty &&
-          int.parse(aScore) > int.parse(hScore);
+        final empate =
+            hScore.isNotEmpty && aScore.isNotEmpty && hScore == aScore;
+        final victoriaLocal =
+            hScore.isNotEmpty &&
+            aScore.isNotEmpty &&
+            int.parse(hScore) > int.parse(aScore);
+        final victoriaVisitante =
+            hScore.isNotEmpty &&
+            aScore.isNotEmpty &&
+            int.parse(aScore) > int.parse(hScore);
 
-      final data = {
-        'Empate': empate,
-        'VictoriaLocal': victoriaLocal,
-        'VictoriaVisitante': victoriaVisitante,
-        'GolesLocal': hScore,
-        'GolesVisitante': aScore,
-        'Local': home,
-        'Visitante': away,
-        'Jornada': jornada,
-      };
+        final data = {
+          'Empate': empate,
+          'VictoriaLocal': victoriaLocal,
+          'VictoriaVisitante': victoriaVisitante,
+          'GolesLocal': hScore,
+          'GolesVisitante': aScore,
+          'Local': home,
+          'Visitante': away,
+          'Jornada': jornada,
+        };
 
-      // Usamos el upsert en lugar de createMatch
-      await service.upsertMatch(
-        league: leagueCollection,
-        jornada: jornada,
-        data: data,
-        local: home,
-        visitante: away,
+        await service.upsertMatch(
+          league: leagueCollection,
+          jornada: jornada,
+          data: data,
+          local: home,
+          visitante: away,
+        );
+      }
+
+      // 2) Obtener usuario actual
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        setState(() => _error = 'No hay usuario autenticado.');
+        return;
+      }
+      final currentUid = currentUser.uid;
+
+      // 3) Obtener IDs de grupos a los que pertenece el usuario
+      final groupIds = await service.getUserGroupIds(currentUid);
+
+      // 4) Para cada grupo: obtener miembros y actualizar aciertos para todos
+      for (final groupId in groupIds) {
+        // Intentamos obtener miembros con el helper del servicio
+        List<String> memberUids = [];
+
+        try {
+          final membersWithStats = await service.getGroupMembersWithStats(
+            groupId,
+          );
+          // Asumimos que GroupMember tiene una propiedad `uid`.
+          // Si tu modelo usa otro nombre, cámbialo aquí.
+          memberUids = membersWithStats
+              .map((m) {
+                // Si GroupMember no expone uid directamente, adapta esto.
+                try {
+                  return (m as dynamic).uid as String;
+                } catch (_) {
+                  return null;
+                }
+              })
+              .whereType<String>()
+              .toList();
+        } catch (e) {
+          // Si falla el helper, intentamos leer directamente la colección MiembrosGrupos
+          try {
+            final snap = await FirebaseFirestore.instance
+                .collection('MiembrosGrupos')
+                .doc(groupId)
+                .collection('Personas')
+                .get();
+            memberUids = snap.docs.map((d) => d.id).toList();
+          } catch (e2) {
+            // Si tampoco funciona, saltamos este grupo y lo registramos
+            print('No se pudieron obtener miembros del grupo $groupId: $e2');
+            continue;
+          }
+        }
+
+        if (memberUids.isEmpty) {
+          print(
+            'Grupo $groupId no tiene miembros o no se pudieron obtener UIDs.',
+          );
+          continue;
+        }
+
+        // Llamada que actualiza los aciertos para todos los miembros del grupo
+        await service.updateAciertosForGroup(
+          league: leagueCollection,
+          jornada: jornada,
+          groupId: groupId,
+          memberUids: memberUids,
+        );
+      }
+
+      // 5) Opcional: si quieres forzar actualización solo para el usuario en todos sus grupos,
+      // podrías llamar updateAciertosForGroup con memberUids = [currentUid] para cada groupId.
+      // En este ejemplo no es necesario porque ya incluimos al usuario en memberUids.
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Datos guardados/actualizados en Firestore'),
+        ),
       );
+    } catch (e, st) {
+      print('Error en _saveToFirestore: $e\n$st');
+      setState(() => _error = 'Error guardando datos: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('❌ Error: $e')));
+    } finally {
+      setState(() => _cargando = false);
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ Datos guardados/actualizados en Firestore'),
-      ),
-    );
   }
 
   @override

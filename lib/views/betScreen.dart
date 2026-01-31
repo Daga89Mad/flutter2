@@ -93,6 +93,21 @@ class _BetScreenState extends State<BetScreen> {
         cuota: cuota,
       );
 
+      // Si el resultado del partido ya está guardado en la BD, actualizamos
+      // únicamente las apuestas del usuario que acaba de apostar.
+      try {
+        await _service.updateAciertosForUser(
+          league: _selectedLeague!,
+          jornada: _jornadaController.text.trim(),
+          groupId: widget.groupId,
+          userId: widget.uid,
+        );
+      } catch (e) {
+        // No queremos bloquear la UX si la actualización de aciertos falla;
+        // registramos el error y seguimos.
+        print('Error actualizando aciertos para el usuario: $e');
+      }
+
       // 1) Mostramos SnackBar de confirmación
       final snackBarController = ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Apuesta guardada correctamente')),
