@@ -2,6 +2,7 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:plantillalogin/models/group.dart';
 import 'package:plantillalogin/models/group_member.dart';
@@ -20,6 +21,23 @@ class FirebaseCrudService {
     if (raw == null) return 0.0;
     if (raw is num) return raw.toDouble();
     return double.tryParse(raw.toString()) ?? 0.0;
+  }
+
+  /// Inicia sesión con email y contraseña
+  /// Lanza Exception con mensaje legible si hay error
+  Future<UserCredential> signInWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    try {
+      return await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+    } on FirebaseAuthException catch (e) {
+      // Usamos _translateErrorCode o _mapAuthError según prefieras
+      throw Exception(_translateErrorCode(e));
+    }
   }
 
   /// Registra un usuario con email y contraseña
@@ -275,6 +293,7 @@ class FirebaseCrudService {
       final memberData = doc.data();
       final uid = doc.id;
 
+      // Apuestas realizadas por el usuario en este grupo
       final betsSnap = await _db
           .collection('Apuestas')
           .doc(groupId)
@@ -283,8 +302,9 @@ class FirebaseCrudService {
           .collection('Realizadas')
           .get();
 
-      double perdidas = 0.0;
-      double ganancias = 0.0;
+      double totalApostado = 0.0; // suma de stakes
+      double perdidas = 0.0; // suma de stakes perdidos
+      double ganancias = 0.0; // beneficio neto (stake * (cuota - 1))
 
       for (var bdoc in betsSnap.docs) {
         final b = bdoc.data();
@@ -292,12 +312,15 @@ class FirebaseCrudService {
         final cantidad = _parseDouble(b['Cantidad']);
         final cuota = _parseDouble(b['Cuota']);
 
+        // Suma de todas las cantidades apostadas (stake)
+        perdidas += cantidad;
         if (acierto) {
-          ganancias += cantidad * cuota;
-        } else {
-          perdidas += cantidad;
+          // Beneficio neto: stake * (odds - 1)
+          ganancias += cantidad * (cuota);
         }
       }
+
+      // Traspasos enviados y recibidos
       final transferSend = await _db
           .collection('Traspasos')
           .doc(groupId)
@@ -317,18 +340,18 @@ class FirebaseCrudService {
       double enviadas = 0.0;
       double recepcionadas = 0.0;
 
-      for (var bdoc in transferSend.docs) {
-        final b = bdoc.data();
-        final cantidad = _parseDouble(b['Cantidad']);
-
+      for (var tdoc in transferSend.docs) {
+        final t = tdoc.data();
+        final cantidad = _parseDouble(t['Cantidad']);
         enviadas += cantidad;
       }
-      for (var bdoc in transferReceived.docs) {
-        final b = bdoc.data();
-        final cantidad = _parseDouble(b['Cantidad']);
+      for (var tdoc in transferReceived.docs) {
+        final t = tdoc.data();
+        final cantidad = _parseDouble(t['Cantidad']);
         recepcionadas += cantidad;
       }
 
+      // Construcción del objeto GroupMember
       result.add(
         GroupMember.fromMaps(
           uid: uid,
@@ -337,6 +360,7 @@ class FirebaseCrudService {
           totalGanancias: ganancias,
           traspasosRecibidos: recepcionadas,
           traspasosEnviados: enviadas,
+          totalApostado: totalApostado, // nuevo campo
         ),
       );
     }

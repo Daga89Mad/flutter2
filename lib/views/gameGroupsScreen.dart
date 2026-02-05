@@ -321,6 +321,26 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                             ],
                           ),
                         ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Beneficio: ${((totalGanado - totalApostado).toStringAsFixed(2))}',
+                                style: TextStyle(
+                                  color: ((totalGanado - totalApostado)) >= 0
+                                      ? Colors.green
+                                      : Colors.red,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Text(
+                                totalGanado - totalApostado >= 0 ? '😊' : '😢',
+                              ),
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 8),
 
                         // Listado de miembros

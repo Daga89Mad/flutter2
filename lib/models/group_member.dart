@@ -8,6 +8,7 @@ class GroupMember {
   final double totalGanancias;
   final double traspasosRecibidos;
   final double traspasosEnviados;
+  final double totalApostado; // nuevo: suma de stakes apostados
 
   GroupMember({
     required this.uid,
@@ -17,6 +18,7 @@ class GroupMember {
     required this.totalGanancias,
     required this.traspasosRecibidos,
     required this.traspasosEnviados,
+    required this.totalApostado,
   });
 
   /// Crea instancia a partir de Map de MiembrosGrupos y stats
@@ -27,6 +29,7 @@ class GroupMember {
     required double totalGanancias,
     required double traspasosRecibidos,
     required double traspasosEnviados,
+    required double totalApostado, // nuevo parámetro
   }) {
     return GroupMember(
       uid: uid,
@@ -36,6 +39,7 @@ class GroupMember {
       totalGanancias: totalGanancias,
       traspasosRecibidos: traspasosRecibidos,
       traspasosEnviados: traspasosEnviados,
+      totalApostado: totalApostado,
     );
   }
 }

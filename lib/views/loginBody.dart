@@ -57,8 +57,8 @@ class _LoginBodyState extends State<LoginBody> {
     });
 
     try {
-      // Llamada al método de login
-      await _authService.registerWithEmail(
+      // Llamada al método de login (no register)
+      await _authService.signInWithEmail(
         email: _emailCtrl.text.trim(),
         password: _passCtrl.text,
       );
@@ -80,8 +80,11 @@ class _LoginBodyState extends State<LoginBody> {
       Navigator.of(
         context,
       ).pushReplacement(MaterialPageRoute(builder: (_) => const MenuScreen()));
-    } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = e.message);
+    } on Exception catch (e) {
+      // FirebaseCrudService lanza Exception con mensaje legible
+      setState(
+        () => _errorMessage = e.toString().replaceFirst('Exception: ', ''),
+      );
     } finally {
       setState(() => _isLoading = false);
     }
