@@ -20,6 +20,11 @@ class _BetScreenState extends State<BetScreen> {
   final _service = FirebaseCrudService();
 
   final List<String> _leagues = ['LaLiga', 'SerieA', 'Liga Profesional'];
+
+  // Temporadas disponibles. La primera es la "legacy" (datos ya cargados).
+  final List<String> _seasons = ['2025-2026', '2026-2027'];
+  late String _selectedSeason;
+
   String? _selectedLeague;
   String? _selectedMatchId;
 
@@ -32,10 +37,19 @@ class _BetScreenState extends State<BetScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedSeason = _currentSeason();
     // Mostramos el popup de "Últimos equipos" al abrir la pantalla
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showLastMatchesDialog();
     });
+  }
+
+  /// Calcula la temporada actual por fecha (la liga arranca en verano).
+  /// Agosto de 2026 -> "2026-2027".
+  String _currentSeason() {
+    final now = DateTime.now();
+    final y = now.year;
+    return now.month >= 7 ? '$y-${y + 1}' : '${y - 1}-$y';
   }
 
   @override
@@ -53,7 +67,7 @@ class _BetScreenState extends State<BetScreen> {
 
     setState(() => _matches = []);
     try {
-      final list = await _service.getMatches(liga, jornada);
+      final list = await _service.getMatches(liga, _selectedSeason, jornada);
       setState(() {
         _matches = list;
         _selectedMatchId = list.isNotEmpty ? list.first.id : null;
@@ -115,7 +129,7 @@ class _BetScreenState extends State<BetScreen> {
                                 (m) => DropdownMenuItem<LastBetMatch>(
                                   value: m,
                                   child: Text(
-                                    '${m.local} vs ${m.visitante}  ·  ${m.league}  ·  J${m.jornada}',
+                                    '${m.local} vs ${m.visitante}  ·  ${m.league}  ·  ${m.temporada}  ·  J${m.jornada}',
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -153,7 +167,8 @@ class _BetScreenState extends State<BetScreen> {
   }
 
   /// Rellena el formulario a partir de un partido anterior:
-  /// - Liga y jornada+1
+  /// - Misma temporada y liga que la apuesta original
+  /// - Jornada+1
   /// - Partido del equipo local en la nueva jornada
   /// - Cantidad multiplicada por 2
   /// - Cuota siempre en blanco
@@ -161,6 +176,9 @@ class _BetScreenState extends State<BetScreen> {
     final nextJornada = (m.jornada + 1).toString();
 
     setState(() {
+      _selectedSeason = _seasons.contains(m.temporada)
+          ? m.temporada
+          : _selectedSeason;
       _selectedLeague = _leagues.contains(m.league)
           ? m.league
           : _selectedLeague;
@@ -172,10 +190,15 @@ class _BetScreenState extends State<BetScreen> {
     });
 
     try {
-      final list = await _service.getMatches(m.league, nextJornada);
+      final list = await _service.getMatches(
+        m.league,
+        m.temporada,
+        nextJornada,
+      );
       // Usamos el equipo LOCAL como ancla para buscar en la nueva jornada
       final matchId = await _service.findMatchIdForTeam(
         league: m.league,
+        temporada: m.temporada,
         jornada: nextJornada,
         team: m.local,
       );
@@ -191,8 +214,8 @@ class _BetScreenState extends State<BetScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'No se encontró partido de ${m.local} en la jornada $nextJornada. '
-              'Revisa que la jornada esté cargada.',
+              'No se encontró partido de ${m.local} en la jornada $nextJornada '
+              '(${m.temporada}). Revisa que la jornada esté cargada.',
             ),
           ),
         );
@@ -234,6 +257,7 @@ class _BetScreenState extends State<BetScreen> {
         userId: widget.uid,
         matchId: _selectedMatchId!,
         league: _selectedLeague!,
+        temporada: _selectedSeason,
         jornada: _jornadaController.text.trim(),
         amount: cantidad,
         cuota: cuota,
@@ -244,6 +268,7 @@ class _BetScreenState extends State<BetScreen> {
       try {
         await _service.updateAciertosForUser(
           league: _selectedLeague!,
+          temporada: _selectedSeason,
           jornada: _jornadaController.text.trim(),
           groupId: widget.groupId,
           userId: widget.uid,
@@ -290,6 +315,24 @@ class _BetScreenState extends State<BetScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text('Temporada:'),
+              DropdownButton<String>(
+                isExpanded: true,
+                value: _selectedSeason,
+                items: _seasons
+                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                    .toList(),
+                onChanged: (val) {
+                  if (val == null) return;
+                  setState(() {
+                    _selectedSeason = val;
+                    _matches = [];
+                    _selectedMatchId = null;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
+
               const Text('Liga:'),
               DropdownButton<String>(
                 isExpanded: true,

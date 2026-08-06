@@ -14,6 +14,11 @@ class FirebaseCrudService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  /// Temporada "antigua": los datos que ya existían (sin nivel de temporada)
+  /// se tratan como si fueran de esta temporada. Para ella se usa la RUTA
+  /// LEGACY (sin el nivel Temporadas), de modo que no hay que migrar nada.
+  static const String legacySeason = '2025-2026';
+
   /// Constructor por defecto, sin parámetros
   FirebaseCrudService();
 
@@ -94,12 +99,33 @@ class FirebaseCrudService {
   // 1) PARTIDOS / JORNADAS
   // ==================================================
 
-  /// Referencia dinámica a la subcolección:
-  /// {league}/Resultados/Jornadas/{jornada}/Partidos
-  CollectionReference _matchesRef(String league, String jornada) {
+  /// Referencia dinámica a la subcolección de partidos, ahora dependiente
+  /// de la TEMPORADA.
+  ///
+  /// - Si la temporada es la "legacy" (2025-2026), usamos la ruta antigua:
+  ///     {league}/Resultados/Jornadas/{jornada}/Partidos
+  ///   Así los datos ya cargados se leen y escriben en su sitio, sin migrar.
+  ///
+  /// - Para cualquier otra temporada usamos la ruta nueva con nivel Temporadas:
+  ///     {league}/Resultados/Temporadas/{temporada}/Jornadas/{jornada}/Partidos
+  CollectionReference _matchesRef(
+    String league,
+    String temporada,
+    String jornada,
+  ) {
+    if (temporada == legacySeason) {
+      return _db
+          .collection(league)
+          .doc('Resultados')
+          .collection('Jornadas')
+          .doc(jornada)
+          .collection('Partidos');
+    }
     return _db
         .collection(league)
         .doc('Resultados')
+        .collection('Temporadas')
+        .doc(temporada)
         .collection('Jornadas')
         .doc(jornada)
         .collection('Partidos');
@@ -107,11 +133,12 @@ class FirebaseCrudService {
 
   Future<void> createMatch(
     String league,
+    String temporada,
     String jornada,
     Map<String, dynamic> data,
   ) async {
     try {
-      await _matchesRef(league, jornada).add(data);
+      await _matchesRef(league, temporada, jornada).add(data);
       print('✅ Partido guardado en Firestore');
     } catch (e) {
       print('❌ Error al guardar partido: $e');
@@ -120,10 +147,11 @@ class FirebaseCrudService {
 
   Future<List<Map<String, dynamic>>> readMatches(
     String league,
+    String temporada,
     String jornada,
   ) async {
     try {
-      final snap = await _matchesRef(league, jornada).get();
+      final snap = await _matchesRef(league, temporada, jornada).get();
       return snap.docs
           .map((doc) => {'id': doc.id, ...doc.data() as Map<String, dynamic>})
           .toList();
@@ -135,21 +163,27 @@ class FirebaseCrudService {
 
   Future<void> updateMatch(
     String league,
+    String temporada,
     String jornada,
     String id,
     Map<String, dynamic> newData,
   ) async {
     try {
-      await _matchesRef(league, jornada).doc(id).update(newData);
+      await _matchesRef(league, temporada, jornada).doc(id).update(newData);
       print('✅ Partido actualizado correctamente');
     } catch (e) {
       print('❌ Error al actualizar partido: $e');
     }
   }
 
-  Future<void> deleteMatch(String league, String jornada, String id) async {
+  Future<void> deleteMatch(
+    String league,
+    String temporada,
+    String jornada,
+    String id,
+  ) async {
     try {
-      await _matchesRef(league, jornada).doc(id).delete();
+      await _matchesRef(league, temporada, jornada).doc(id).delete();
       print('✅ Partido eliminado correctamente');
     } catch (e) {
       print('❌ Error al eliminar partido: $e');
@@ -185,14 +219,16 @@ class FirebaseCrudService {
   }
 
   /// Actualiza el campo 'Acierto' solo para las apuestas de un usuario concreto
-  /// en un grupo, comparando con el resultado ya guardado en la colección de partidos.
+  /// en un grupo, comparando con el resultado ya guardado en la colección de
+  /// partidos de la TEMPORADA indicada.
   Future<void> updateAciertosForUser({
     required String league,
+    required String temporada,
     required String jornada,
     required String groupId,
     required String userId,
   }) async {
-    final partidosSnap = await _matchesRef(league, jornada).get();
+    final partidosSnap = await _matchesRef(league, temporada, jornada).get();
 
     final batch = _db.batch();
     int updates = 0;
@@ -281,6 +317,10 @@ class FirebaseCrudService {
 
   /// Recupera alias, capitalInicial y estadísticas de apuestas
   /// ruta: MiembrosGrupos/{groupId}/Personas/{uid}
+  ///
+  /// Nota: las estadísticas se calculan con los propios campos de cada apuesta
+  /// (Cantidad, Cuota, Acierto), así que NO dependen de la temporada. Se
+  /// suman TODAS las apuestas del usuario en el grupo, de cualquier temporada.
   Future<List<GroupMember>> getGroupMembersWithStats(String groupId) async {
     final memberSnap = await _db
         .collection('MiembrosGrupos')
@@ -371,6 +411,10 @@ class FirebaseCrudService {
 
   /// Recupera todas las apuestas realizadas de un usuario,
   /// parseando correctamente los campos y ordenándolas por fecha.
+  ///
+  /// Cada apuesta resuelve su partido en la TEMPORADA guardada en el propio
+  /// documento ('Temporada'). Si la apuesta es antigua y no tiene ese campo,
+  /// se asume la temporada legacy (2025-2026).
   Future<List<BetDetail>> fetchRealizedBets({
     required String groupId,
     required String uid,
@@ -390,6 +434,7 @@ class FirebaseCrudService {
       final data = doc.data() as Map<String, dynamic>;
 
       final liga = data['Liga']?.toString() ?? '';
+      final temporada = data['Temporada']?.toString() ?? legacySeason;
       final jornadaRaw = data['Jornada'];
       final jornada = jornadaRaw is num
           ? jornadaRaw.toInt()
@@ -405,9 +450,10 @@ class FirebaseCrudService {
           ? fechaRaw.toDate()
           : DateTime.tryParse(fechaRaw.toString()) ?? DateTime.now();
 
-      // Traemos datos de local y visitante
+      // Traemos datos de local y visitante desde la temporada correcta
       final matchDoc = await _matchesRef(
         liga,
+        temporada,
         jornada.toString(),
       ).doc(matchId).get();
       final matchData = matchDoc.data() as Map<String, dynamic>? ?? {};
@@ -433,8 +479,8 @@ class FirebaseCrudService {
 
   /// Devuelve los últimos [limit] partidos apostados por el usuario en el
   /// grupo, ordenados del más reciente al más antiguo. NO agrupa por equipo:
-  /// cada elemento es un partido con su local, visitante, liga, jornada y
-  /// la cantidad de la apuesta original.
+  /// cada elemento es un partido con su local, visitante, liga, temporada,
+  /// jornada y la cantidad de la apuesta original.
   Future<List<LastBetMatch>> fetchLastBetMatches({
     required String groupId,
     required String uid,
@@ -456,6 +502,7 @@ class FirebaseCrudService {
       final data = doc.data() as Map<String, dynamic>;
 
       final liga = data['Liga']?.toString() ?? '';
+      final temporada = data['Temporada']?.toString() ?? legacySeason;
       final jornadaRaw = data['Jornada'];
       final jornada = jornadaRaw is num
           ? jornadaRaw.toInt()
@@ -467,6 +514,7 @@ class FirebaseCrudService {
 
       final matchDoc = await _matchesRef(
         liga,
+        temporada,
         jornada.toString(),
       ).doc(matchId).get();
       if (!matchDoc.exists) continue;
@@ -480,6 +528,7 @@ class FirebaseCrudService {
           local: local,
           visitante: visitante,
           league: liga,
+          temporada: temporada,
           jornada: jornada,
           amount: cantidad,
           matchId: matchId,
@@ -490,14 +539,15 @@ class FirebaseCrudService {
     return result;
   }
 
-  /// Busca el id del partido de una jornada/liga en el que juega [team]
-  /// (como local o visitante). Devuelve null si no lo encuentra.
+  /// Busca el id del partido de una jornada/liga/temporada en el que juega
+  /// [team] (como local o visitante). Devuelve null si no lo encuentra.
   Future<String?> findMatchIdForTeam({
     required String league,
+    required String temporada,
     required String jornada,
     required String team,
   }) async {
-    final snap = await _matchesRef(league, jornada).get();
+    final snap = await _matchesRef(league, temporada, jornada).get();
     for (final doc in snap.docs) {
       final data = doc.data() as Map<String, dynamic>;
       final local = data['Local'] as String? ?? '';
@@ -513,8 +563,12 @@ class FirebaseCrudService {
   // 4) MATCH OPTIONS & APUESTAS
   // ==================================================
 
-  Future<List<MatchOption>> getMatches(String league, String jornada) async {
-    final snapshot = await _matchesRef(league, jornada).get();
+  Future<List<MatchOption>> getMatches(
+    String league,
+    String temporada,
+    String jornada,
+  ) async {
+    final snapshot = await _matchesRef(league, temporada, jornada).get();
     return snapshot.docs.map((doc) {
       final data = doc.data() as Map<String, dynamic>;
       final local = data['Local'] as String? ?? '';
@@ -525,12 +579,13 @@ class FirebaseCrudService {
 
   Future<void> upsertMatch({
     required String league,
+    required String temporada,
     required String jornada,
     required Map<String, dynamic> data,
     required String local,
     required String visitante,
   }) async {
-    final col = _matchesRef(league, jornada);
+    final col = _matchesRef(league, temporada, jornada);
     final query = await col
         .where('Local', isEqualTo: local)
         .where('Visitante', isEqualTo: visitante)
@@ -548,6 +603,7 @@ class FirebaseCrudService {
     required String userId,
     required String matchId,
     required String league,
+    required String temporada,
     required String jornada,
     required double amount,
     required double cuota,
@@ -562,6 +618,7 @@ class FirebaseCrudService {
     await ref.add({
       'MatchId': matchId,
       'Liga': league,
+      'Temporada': temporada,
       'Jornada': jornada,
       'Cantidad': amount,
       'Cuota': cuota,
@@ -572,11 +629,12 @@ class FirebaseCrudService {
 
   Future<void> updateAciertosForGroup({
     required String league,
+    required String temporada,
     required String jornada,
     required String groupId,
     required List<String> memberUids,
   }) async {
-    final partidosSnap = await _matchesRef(league, jornada).get();
+    final partidosSnap = await _matchesRef(league, temporada, jornada).get();
     final batch = _db.batch();
 
     for (var pdoc in partidosSnap.docs) {

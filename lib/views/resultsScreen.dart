@@ -20,6 +20,10 @@ class _ResultsScreenState extends State<ResultsScreen> {
     'Italia': 4332, // Serie A
   };
 
+  // Temporadas disponibles. La primera es la "legacy" (datos ya cargados).
+  final List<String> _seasons = ['2025-2026', '2026-2027'];
+  late String _selectedSeason;
+
   // 2) Estado UI
   String _seleccion = 'España';
   bool _cargando = false;
@@ -31,7 +35,6 @@ class _ResultsScreenState extends State<ResultsScreen> {
 
   // 4) Constantes API
   static const String _apiKey = '123';
-  static const String _season = '2025-2026';
 
   // 5) Última jornada detectada (para prellenar el campo)
   int? _lastRound;
@@ -39,7 +42,16 @@ class _ResultsScreenState extends State<ResultsScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedSeason = _currentSeason();
     _loadLastRound();
+  }
+
+  /// Calcula la temporada actual por fecha (la liga arranca en verano).
+  /// Agosto de 2026 -> "2026-2027".
+  String _currentSeason() {
+    final now = DateTime.now();
+    final y = now.year;
+    return now.month >= 7 ? '$y-${y + 1}' : '${y - 1}-$y';
   }
 
   @override
@@ -59,7 +71,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
     final leagueId = _leagueIds[_seleccion]!;
     final uriSeason = Uri.parse(
       'https://www.thesportsdb.com/api/v1/json/$_apiKey/eventsseason.php'
-      '?id=$leagueId&s=$_season',
+      '?id=$leagueId&s=$_selectedSeason',
     );
 
     try {
@@ -69,7 +81,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
       final data = json.decode(resp.body) as Map<String, dynamic>;
       final allEvents = (data['events'] as List<dynamic>?) ?? [];
       if (allEvents.isEmpty) {
-        setState(() => _error = 'No hay partidos para $_season');
+        setState(() => _error = 'No hay partidos para $_selectedSeason');
         return;
       }
 
@@ -104,7 +116,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
     final uriRound = Uri.parse(
       'https://www.thesportsdb.com/api/v1/json/$_apiKey/eventsround.php'
       '?id=$leagueId'
-      '&r=$round',
+      '&r=$round'
+      '&s=$_selectedSeason',
     );
 
     try {
@@ -141,7 +154,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
     final service = FirebaseCrudService();
 
     try {
-      // 1) Upsert de todos los partidos
+      // 1) Upsert de todos los partidos en la temporada seleccionada
       for (var ev in _events!) {
         final home = ev['strHomeTeam'] as String? ?? '';
         final away = ev['strAwayTeam'] as String? ?? '';
@@ -168,10 +181,12 @@ class _ResultsScreenState extends State<ResultsScreen> {
           'Local': home,
           'Visitante': away,
           'Jornada': jornada,
+          'Temporada': _selectedSeason,
         };
 
         await service.upsertMatch(
           league: leagueCollection,
+          temporada: _selectedSeason,
           jornada: jornada,
           data: data,
           local: home,
@@ -200,10 +215,8 @@ class _ResultsScreenState extends State<ResultsScreen> {
             groupId,
           );
           // Asumimos que GroupMember tiene una propiedad `uid`.
-          // Si tu modelo usa otro nombre, cámbialo aquí.
           memberUids = membersWithStats
               .map((m) {
-                // Si GroupMember no expone uid directamente, adapta esto.
                 try {
                   return (m as dynamic).uid as String;
                 } catch (_) {
@@ -235,18 +248,16 @@ class _ResultsScreenState extends State<ResultsScreen> {
           continue;
         }
 
-        // Llamada que actualiza los aciertos para todos los miembros del grupo
+        // Llamada que actualiza los aciertos para todos los miembros del grupo,
+        // usando la temporada seleccionada.
         await service.updateAciertosForGroup(
           league: leagueCollection,
+          temporada: _selectedSeason,
           jornada: jornada,
           groupId: groupId,
           memberUids: memberUids,
         );
       }
-
-      // 5) Opcional: si quieres forzar actualización solo para el usuario en todos sus grupos,
-      // podrías llamar updateAciertosForGroup con memberUids = [currentUid] para cada groupId.
-      // En este ejemplo no es necesario porque ya incluimos al usuario en memberUids.
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -273,6 +284,21 @@ class _ResultsScreenState extends State<ResultsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            DropdownButtonFormField<String>(
+              decoration: const InputDecoration(labelText: 'Temporada'),
+              value: _selectedSeason,
+              items: _seasons
+                  .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                  .toList(),
+              onChanged: (val) {
+                if (val == null) return;
+                setState(() => _selectedSeason = val);
+                _loadLastRound();
+              },
+            ),
+
+            const SizedBox(height: 12),
+
             DropdownButtonFormField<String>(
               decoration: const InputDecoration(labelText: 'Liga'),
               value: _seleccion,
