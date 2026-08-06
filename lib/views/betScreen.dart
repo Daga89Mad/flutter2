@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/models/match_option.dart';
+import 'package:plantillalogin/models/last_bet_match.dart';
 import '../core/firebaseCrudService.dart';
 
 class BetScreen extends StatefulWidget {
@@ -27,6 +28,15 @@ class _BetScreenState extends State<BetScreen> {
   final _cuotaController = TextEditingController();
 
   List<MatchOption> _matches = [];
+
+  @override
+  void initState() {
+    super.initState();
+    // Mostramos el popup de "Últimos equipos" al abrir la pantalla
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showLastMatchesDialog();
+    });
+  }
 
   @override
   void dispose() {
@@ -60,6 +70,142 @@ class _BetScreenState extends State<BetScreen> {
     // Si usas separador de miles como '.', lo eliminamos; luego convertimos la coma decimal a punto.
     return double.tryParse(cleaned);
   }
+
+  // ==================================================
+  // POPUP "ÚLTIMOS EQUIPOS"
+  // ==================================================
+
+  Future<void> _showLastMatchesDialog() async {
+    List<LastBetMatch> lastMatches = [];
+    try {
+      lastMatches = await _service.fetchLastBetMatches(
+        groupId: widget.groupId,
+        uid: widget.uid,
+      );
+    } catch (_) {
+      // Si falla la carga, mostramos el popup vacío para poder cerrar.
+    }
+
+    if (!mounted) return;
+
+    LastBetMatch? selected = lastMatches.isNotEmpty ? lastMatches.first : null;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: const Text('Últimos equipos'),
+              content: lastMatches.isEmpty
+                  ? const Text('No tienes apuestas anteriores en este grupo.')
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Selecciona uno de tus últimos partidos apostados:',
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButton<LastBetMatch>(
+                          isExpanded: true,
+                          value: selected,
+                          items: lastMatches
+                              .map(
+                                (m) => DropdownMenuItem<LastBetMatch>(
+                                  value: m,
+                                  child: Text(
+                                    '${m.local} vs ${m.visitante}  ·  ${m.league}  ·  J${m.jornada}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) => setDialogState(() => selected = v),
+                        ),
+                      ],
+                    ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cerrar'),
+                ),
+                ElevatedButton(
+                  // Evitamos el minimumSize infinito del tema global
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(96, 40),
+                  ),
+                  onPressed: selected == null
+                      ? null
+                      : () {
+                          final chosen = selected!;
+                          Navigator.of(ctx).pop();
+                          _applyLastBet(chosen);
+                        },
+                  child: const Text('Cargar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Rellena el formulario a partir de un partido anterior:
+  /// - Liga y jornada+1
+  /// - Partido del equipo local en la nueva jornada
+  /// - Cantidad multiplicada por 2
+  /// - Cuota siempre en blanco
+  Future<void> _applyLastBet(LastBetMatch m) async {
+    final nextJornada = (m.jornada + 1).toString();
+
+    setState(() {
+      _selectedLeague = _leagues.contains(m.league)
+          ? m.league
+          : _selectedLeague;
+      _jornadaController.text = nextJornada;
+      _cantidadController.text = (m.amount * 2).toStringAsFixed(2);
+      _cuotaController.clear(); // Cuota siempre en blanco
+      _matches = [];
+      _selectedMatchId = null;
+    });
+
+    try {
+      final list = await _service.getMatches(m.league, nextJornada);
+      // Usamos el equipo LOCAL como ancla para buscar en la nueva jornada
+      final matchId = await _service.findMatchIdForTeam(
+        league: m.league,
+        jornada: nextJornada,
+        team: m.local,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _matches = list;
+        _selectedMatchId = matchId ?? (list.isNotEmpty ? list.first.id : null);
+      });
+
+      if (matchId == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'No se encontró partido de ${m.local} en la jornada $nextJornada. '
+              'Revisa que la jornada esté cargada.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error cargando jornada: $e')));
+    }
+  }
+
+  // ==================================================
 
   Future<void> _saveBet() async {
     if (_selectedLeague == null ||
@@ -128,7 +274,16 @@ class _BetScreenState extends State<BetScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Realizar Apuesta')),
+      appBar: AppBar(
+        title: const Text('Realizar Apuesta'),
+        actions: [
+          IconButton(
+            tooltip: 'Últimos equipos',
+            icon: const Icon(Icons.history),
+            onPressed: _showLastMatchesDialog,
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(

@@ -8,6 +8,7 @@ import 'package:plantillalogin/models/group.dart';
 import 'package:plantillalogin/models/group_member.dart';
 import 'package:plantillalogin/models/match_option.dart';
 import 'package:plantillalogin/models/bet_detail.dart';
+import 'package:plantillalogin/models/last_bet_match.dart';
 
 class FirebaseCrudService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -428,6 +429,84 @@ class FirebaseCrudService {
     }
 
     return result;
+  }
+
+  /// Devuelve los últimos [limit] partidos apostados por el usuario en el
+  /// grupo, ordenados del más reciente al más antiguo. NO agrupa por equipo:
+  /// cada elemento es un partido con su local, visitante, liga, jornada y
+  /// la cantidad de la apuesta original.
+  Future<List<LastBetMatch>> fetchLastBetMatches({
+    required String groupId,
+    required String uid,
+    int limit = 8,
+  }) async {
+    final snapshot = await _db
+        .collection('Apuestas')
+        .doc(groupId)
+        .collection('Personas')
+        .doc(uid)
+        .collection('Realizadas')
+        .orderBy('FechaApuesta', descending: true)
+        .limit(limit)
+        .get();
+
+    final List<LastBetMatch> result = [];
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+
+      final liga = data['Liga']?.toString() ?? '';
+      final jornadaRaw = data['Jornada'];
+      final jornada = jornadaRaw is num
+          ? jornadaRaw.toInt()
+          : int.tryParse(jornadaRaw.toString()) ?? 0;
+      final matchId = data['MatchId']?.toString() ?? '';
+      final cantidad = _parseDouble(data['Cantidad']);
+
+      if (liga.isEmpty || matchId.isEmpty) continue;
+
+      final matchDoc = await _matchesRef(
+        liga,
+        jornada.toString(),
+      ).doc(matchId).get();
+      if (!matchDoc.exists) continue;
+
+      final matchData = matchDoc.data() as Map<String, dynamic>? ?? {};
+      final local = matchData['Local'] as String? ?? '';
+      final visitante = matchData['Visitante'] as String? ?? '';
+
+      result.add(
+        LastBetMatch(
+          local: local,
+          visitante: visitante,
+          league: liga,
+          jornada: jornada,
+          amount: cantidad,
+          matchId: matchId,
+        ),
+      );
+    }
+
+    return result;
+  }
+
+  /// Busca el id del partido de una jornada/liga en el que juega [team]
+  /// (como local o visitante). Devuelve null si no lo encuentra.
+  Future<String?> findMatchIdForTeam({
+    required String league,
+    required String jornada,
+    required String team,
+  }) async {
+    final snap = await _matchesRef(league, jornada).get();
+    for (final doc in snap.docs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final local = data['Local'] as String? ?? '';
+      final visitante = data['Visitante'] as String? ?? '';
+      if (local == team || visitante == team) {
+        return doc.id;
+      }
+    }
+    return null;
   }
 
   // ==================================================
