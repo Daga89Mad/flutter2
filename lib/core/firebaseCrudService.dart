@@ -539,6 +539,71 @@ class FirebaseCrudService {
     return result;
   }
 
+  /// Devuelve la última jornada (la más alta) de [league] y [temporada] en la
+  /// que el usuario apostó a un partido de [team] (como local o visitante),
+  /// empezando a contar desde [fromJornada]. Si no hay apuestas posteriores a
+  /// [fromJornada] con ese equipo, devuelve [fromJornada].
+  ///
+  /// Ejemplo: apuestas al Equipo A en J1, J2 y J3. Con fromJornada = 1, 2 o 3
+  /// devuelve 3, y la nueva apuesta será para la jornada 4.
+  Future<int> findLastBetJornadaForTeam({
+    required String groupId,
+    required String uid,
+    required String league,
+    required String temporada,
+    required String team,
+    required int fromJornada,
+  }) async {
+    final snapshot = await _db
+        .collection('Apuestas')
+        .doc(groupId)
+        .collection('Personas')
+        .doc(uid)
+        .collection('Realizadas')
+        .where('Liga', isEqualTo: league)
+        .get();
+
+    // Agrupamos los MatchId por jornada, solo de la misma temporada y
+    // posteriores a fromJornada
+    final Map<int, Set<String>> matchIdsByJornada = {};
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final betSeason = data['Temporada']?.toString() ?? legacySeason;
+      if (betSeason != temporada) continue;
+      final jornadaRaw = data['Jornada'];
+      final jornada = jornadaRaw is num
+          ? jornadaRaw.toInt()
+          : int.tryParse(jornadaRaw?.toString() ?? '') ?? 0;
+      final matchId = data['MatchId']?.toString() ?? '';
+      if (jornada <= fromJornada || matchId.isEmpty) continue;
+      matchIdsByJornada.putIfAbsent(jornada, () => <String>{}).add(matchId);
+    }
+
+    // Recorremos de la jornada más alta a la más baja: la primera en la que
+    // aparezca el equipo es la última apuesta a ese equipo.
+    final jornadas = matchIdsByJornada.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+
+    for (final jornada in jornadas) {
+      for (final matchId in matchIdsByJornada[jornada]!) {
+        final matchDoc = await _matchesRef(
+          league,
+          temporada,
+          jornada.toString(),
+        ).doc(matchId).get();
+        if (!matchDoc.exists) continue;
+        final matchData = matchDoc.data() as Map<String, dynamic>? ?? {};
+        final local = matchData['Local'] as String? ?? '';
+        final visitante = matchData['Visitante'] as String? ?? '';
+        if (local == team || visitante == team) {
+          return jornada;
+        }
+      }
+    }
+
+    return fromJornada;
+  }
+
   /// Busca el id del partido de una jornada/liga/temporada en el que juega
   /// [team] (como local o visitante). Devuelve null si no lo encuentra.
   Future<String?> findMatchIdForTeam({
@@ -625,6 +690,46 @@ class FirebaseCrudService {
       'Acierto': false,
       'FechaApuesta': FieldValue.serverTimestamp(),
     });
+  }
+
+  /// Referencia al documento de una apuesta concreta:
+  /// Apuestas/{groupId}/Personas/{uid}/Realizadas/{betId}
+  DocumentReference<Map<String, dynamic>> _betRef({
+    required String groupId,
+    required String uid,
+    required String betId,
+  }) {
+    return _db
+        .collection('Apuestas')
+        .doc(groupId)
+        .collection('Personas')
+        .doc(uid)
+        .collection('Realizadas')
+        .doc(betId);
+  }
+
+  /// Modifica la cantidad y la cuota de una apuesta existente.
+  Future<void> updateBet({
+    required String groupId,
+    required String uid,
+    required String betId,
+    required double amount,
+    required double cuota,
+  }) async {
+    await _betRef(
+      groupId: groupId,
+      uid: uid,
+      betId: betId,
+    ).update({'Cantidad': amount, 'Cuota': cuota});
+  }
+
+  /// Borra una apuesta.
+  Future<void> deleteBet({
+    required String groupId,
+    required String uid,
+    required String betId,
+  }) async {
+    await _betRef(groupId: groupId, uid: uid, betId: betId).delete();
   }
 
   Future<void> updateAciertosForGroup({

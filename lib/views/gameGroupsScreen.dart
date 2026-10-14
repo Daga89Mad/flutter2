@@ -433,8 +433,8 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                       ),
                                     ],
                                   ),
-                                  onTap: () {
-                                    Navigator.of(context).push(
+                                  onTap: () async {
+                                    await Navigator.of(context).push(
                                       MaterialPageRoute(
                                         builder: (_) => BetListScreen(
                                           groupId: _selectedGroupId!,
@@ -442,6 +442,17 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                                         ),
                                       ),
                                     );
+                                    // Recalculamos por si se han modificado
+                                    // o borrado apuestas propias
+                                    if (!mounted || _selectedGroupId == null) {
+                                      return;
+                                    }
+                                    setState(() {
+                                      _membersFuture = _service
+                                          .getGroupMembersWithStats(
+                                            _selectedGroupId!,
+                                          );
+                                    });
                                   },
                                 ),
                               );

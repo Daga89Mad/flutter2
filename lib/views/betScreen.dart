@@ -1,9 +1,11 @@
-// lib/screens/bet_screen.dart
+// lib/views/betScreen.dart
 
 import 'package:flutter/material.dart';
-import 'package:plantillalogin/models/match_option.dart';
+import 'package:plantillalogin/core/firebaseCrudService.dart';
+import 'package:plantillalogin/core/numberUtils.dart';
 import 'package:plantillalogin/models/last_bet_match.dart';
-import '../core/firebaseCrudService.dart';
+import 'package:plantillalogin/models/last_bet_team.dart';
+import 'package:plantillalogin/models/match_option.dart';
 
 class BetScreen extends StatefulWidget {
   final String groupId;
@@ -33,11 +35,17 @@ class _BetScreenState extends State<BetScreen> {
 
   List<MatchOption> _matches = [];
 
+  /// true mientras se calcula la apuesta automática
+  bool _loadingAuto = false;
+
+  /// Número de partidos apostados que se muestran en la apuesta automática
+  static const int _lastMatchesLimit = 5;
+
   @override
   void initState() {
     super.initState();
     _selectedSeason = _currentSeason();
-    // Mostramos el popup de "Últimos equipos" al abrir la pantalla
+    // Mostramos el popup de apuesta automática al abrir la pantalla
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showLastMatchesDialog();
     });
@@ -48,7 +56,8 @@ class _BetScreenState extends State<BetScreen> {
   String _currentSeason() {
     final now = DateTime.now();
     final y = now.year;
-    return now.month >= 7 ? '$y-${y + 1}' : '${y - 1}-$y';
+    final season = now.month >= 7 ? '$y-${y + 1}' : '${y - 1}-$y';
+    return _seasons.contains(season) ? season : _seasons.last;
   }
 
   @override
@@ -59,6 +68,13 @@ class _BetScreenState extends State<BetScreen> {
     super.dispose();
   }
 
+  void _showSnack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(text)));
+  }
+
   Future<void> _loadMatches() async {
     final liga = _selectedLeague;
     final jornada = _jornadaController.text.trim();
@@ -67,41 +83,63 @@ class _BetScreenState extends State<BetScreen> {
     setState(() => _matches = []);
     try {
       final list = await _service.getMatches(liga, _selectedSeason, jornada);
+      if (!mounted) return;
       setState(() {
         _matches = list;
         _selectedMatchId = list.isNotEmpty ? list.first.id : null;
       });
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error cargando partidos: $e')));
+      _showSnack('Error cargando partidos: $e');
     }
   }
 
-  double? parseNumber(String text) {
-    final cleaned = text.trim().replaceAll('.', '').replaceAll(',', '.');
-    // Si usas separador de miles como '.', lo eliminamos; luego convertimos la coma decimal a punto.
-    return double.tryParse(cleaned);
+  // ==================================================
+  // POPUP "APUESTA AUTOMÁTICA"
+  // ==================================================
+
+  /// Convierte los últimos partidos apostados en una lista de equipos
+  /// (local y visitante de cada partido), cada uno con su jornada.
+  List<LastBetTeam> _teamsFromMatches(List<LastBetMatch> matches) {
+    final List<LastBetTeam> teams = [];
+    final Set<String> seen = {};
+
+    for (final m in matches) {
+      for (final team in [m.local, m.visitante]) {
+        if (team.isEmpty) continue;
+        final t = LastBetTeam(
+          team: team,
+          league: m.league,
+          temporada: m.temporada,
+          jornada: m.jornada,
+          amount: m.amount,
+          matchId: m.matchId,
+        );
+        if (seen.add(t.key)) teams.add(t);
+      }
+    }
+    return teams;
   }
 
-  // ==================================================
-  // POPUP "ÚLTIMOS EQUIPOS"
-  // ==================================================
-
   Future<void> _showLastMatchesDialog() async {
-    List<LastBetMatch> lastMatches = [];
+    List<LastBetTeam> teams = [];
     try {
-      lastMatches = await _service.fetchLastBetMatches(
+      final lastMatches = await _service.fetchLastBetMatches(
         groupId: widget.groupId,
         uid: widget.uid,
+        limit: _lastMatchesLimit,
       );
+      teams = _teamsFromMatches(lastMatches);
     } catch (_) {
       // Si falla la carga, mostramos el popup vacío para poder cerrar.
     }
 
     if (!mounted) return;
 
-    LastBetMatch? selected = lastMatches.isNotEmpty ? lastMatches.first : null;
+    // Si hay varias ligas mostramos también la liga para distinguir equipos
+    final multiLeague = teams.map((t) => t.league).toSet().length > 1;
+    final multiSeason = teams.map((t) => t.temporada).toSet().length > 1;
+
+    LastBetTeam? selected = teams.isNotEmpty ? teams.first : null;
 
     await showDialog(
       context: context,
@@ -109,26 +147,31 @@ class _BetScreenState extends State<BetScreen> {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
             return AlertDialog(
-              title: const Text('Últimos equipos'),
-              content: lastMatches.isEmpty
+              title: const Text('Apuesta automática'),
+              content: teams.isEmpty
                   ? const Text('No tienes apuestas anteriores en este grupo.')
                   : Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Selecciona uno de tus últimos partidos apostados:',
+                          'Selecciona un equipo de tus últimos partidos '
+                          'apostados:',
                         ),
                         const SizedBox(height: 12),
-                        DropdownButton<LastBetMatch>(
+                        DropdownButton<LastBetTeam>(
                           isExpanded: true,
                           value: selected,
-                          items: lastMatches
+                          items: teams
                               .map(
-                                (m) => DropdownMenuItem<LastBetMatch>(
-                                  value: m,
+                                (t) => DropdownMenuItem<LastBetTeam>(
+                                  value: t,
                                   child: Text(
-                                    '${m.local} vs ${m.visitante}  ·  ${m.league}  ·  ${m.temporada}  ·  J${m.jornada}',
+                                    [
+                                      t.displayName,
+                                      if (multiLeague) t.league,
+                                      if (multiSeason) t.temporada,
+                                    ].join('  ·  '),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -136,6 +179,16 @@ class _BetScreenState extends State<BetScreen> {
                               .toList(),
                           onChanged: (v) => setDialogState(() => selected = v),
                         ),
+                        if (selected != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Apostado en J${selected!.jornada}: '
+                            '${formatDecimal(selected!.amount)}  →  '
+                            'Nueva cantidad: '
+                            '${formatDecimal(roundTo(selected!.amount * 2))}',
+                            style: Theme.of(ctx).textTheme.bodySmall,
+                          ),
+                        ],
                       ],
                     ),
               actions: [
@@ -165,65 +218,74 @@ class _BetScreenState extends State<BetScreen> {
     );
   }
 
-  /// Rellena el formulario a partir de un partido anterior:
-  /// - Misma temporada y liga que la apuesta original
-  /// - Jornada+1
-  /// - Partido del equipo local en la nueva jornada
-  /// - Cantidad multiplicada por 2
+  /// Rellena el formulario a partir del equipo seleccionado:
+  /// - Liga y temporada del partido original
+  /// - Jornada = última jornada en la que se apostó a ese equipo + 1
+  ///   (no la jornada seleccionada + 1)
+  /// - Partido de ese equipo en la nueva jornada
+  /// - Cantidad = cantidad apostada en la jornada seleccionada x 2
   /// - Cuota siempre en blanco
-  Future<void> _applyLastBet(LastBetMatch m) async {
-    final nextJornada = (m.jornada + 1).toString();
+  Future<void> _applyLastBet(LastBetTeam t) async {
+    final newAmount = roundTo(t.amount * 2);
 
     setState(() {
-      _selectedSeason = _seasons.contains(m.temporada)
-          ? m.temporada
+      _loadingAuto = true;
+      _selectedSeason = _seasons.contains(t.temporada)
+          ? t.temporada
           : _selectedSeason;
-      _selectedLeague = _leagues.contains(m.league)
-          ? m.league
+      _selectedLeague = _leagues.contains(t.league)
+          ? t.league
           : _selectedLeague;
-      _jornadaController.text = nextJornada;
-      _cantidadController.text = (m.amount * 2).toStringAsFixed(2);
+      _cantidadController.text = formatDecimal(newAmount);
       _cuotaController.clear(); // Cuota siempre en blanco
+      _jornadaController.clear();
       _matches = [];
       _selectedMatchId = null;
     });
 
     try {
+      // Última jornada en la que se apostó a este equipo
+      final lastJornada = await _service.findLastBetJornadaForTeam(
+        groupId: widget.groupId,
+        uid: widget.uid,
+        league: t.league,
+        temporada: t.temporada,
+        team: t.team,
+        fromJornada: t.jornada,
+      );
+      final nextJornada = (lastJornada + 1).toString();
+
       final list = await _service.getMatches(
-        m.league,
-        m.temporada,
+        t.league,
+        t.temporada,
         nextJornada,
       );
-      // Usamos el equipo LOCAL como ancla para buscar en la nueva jornada
       final matchId = await _service.findMatchIdForTeam(
-        league: m.league,
-        temporada: m.temporada,
+        league: t.league,
+        temporada: t.temporada,
         jornada: nextJornada,
-        team: m.local,
+        team: t.team,
       );
 
       if (!mounted) return;
 
       setState(() {
+        _jornadaController.text = nextJornada;
         _matches = list;
         _selectedMatchId = matchId ?? (list.isNotEmpty ? list.first.id : null);
       });
 
-      if (matchId == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'No se encontró partido de ${m.local} en la jornada $nextJornada '
-              '(${m.temporada}). Revisa que la jornada esté cargada.',
-            ),
-          ),
+      if (matchId == null) {
+        _showSnack(
+          'No se encontró partido de ${t.team} en la jornada $nextJornada '
+          '(${t.temporada}). '
+          'Revisa que la jornada esté cargada.',
         );
       }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error cargando jornada: $e')));
+      _showSnack('Error cargando jornada: $e');
+    } finally {
+      if (mounted) setState(() => _loadingAuto = false);
     }
   }
 
@@ -235,18 +297,18 @@ class _BetScreenState extends State<BetScreen> {
         _jornadaController.text.trim().isEmpty ||
         _cantidadController.text.trim().isEmpty ||
         _cuotaController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Rellena todos los campos')));
+      _showSnack('Rellena todos los campos');
       return;
     }
 
-    final cantidad = parseNumber(_cantidadController.text);
-    final cuota = parseNumber(_cuotaController.text);
+    final cantidad = parseDecimal(_cantidadController.text);
+    final cuota = parseDecimal(_cuotaController.text);
     if (cantidad == null || cuota == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cantidad y cuota deben ser números')),
-      );
+      _showSnack('Cantidad y cuota deben ser números (ej: 10.50)');
+      return;
+    }
+    if (cantidad <= 0 || cuota <= 0) {
+      _showSnack('Cantidad y cuota deben ser mayores que 0');
       return;
     }
 
@@ -258,8 +320,8 @@ class _BetScreenState extends State<BetScreen> {
         league: _selectedLeague!,
         temporada: _selectedSeason,
         jornada: _jornadaController.text.trim(),
-        amount: cantidad,
-        cuota: cuota,
+        amount: roundTo(cantidad, 2),
+        cuota: roundTo(cuota, 3),
       );
 
       // Si el resultado del partido ya está guardado en la BD, actualizamos
@@ -273,25 +335,25 @@ class _BetScreenState extends State<BetScreen> {
           userId: widget.uid,
         );
       } catch (e) {
-        // No queremos bloquear la UX si la actualización de aciertos falla;
-        // registramos el error y seguimos.
-        print('Error actualizando aciertos para el usuario: $e');
+        // No bloqueamos la UX si la actualización de aciertos falla
+        debugPrint('Error actualizando aciertos para el usuario: $e');
       }
+
+      if (!mounted) return;
 
       // 1) Mostramos SnackBar de confirmación
       final snackBarController = ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Apuesta guardada correctamente')),
       );
 
-      // 2) Esperamos a que el SnackBar desaparezca (opcional)
+      // 2) Esperamos a que el SnackBar desaparezca
       await snackBarController.closed;
 
       // 3) Cerramos la pantalla devolviendo 'true'
+      if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error guardando apuesta: $e')));
+      _showSnack('Error guardando apuesta: $e');
     }
   }
 
@@ -302,9 +364,9 @@ class _BetScreenState extends State<BetScreen> {
         title: const Text('Realizar Apuesta'),
         actions: [
           IconButton(
-            tooltip: 'Últimos equipos',
+            tooltip: 'Apuesta automática',
             icon: const Icon(Icons.history),
-            onPressed: _showLastMatchesDialog,
+            onPressed: _loadingAuto ? null : _showLastMatchesDialog,
           ),
         ],
       ),
@@ -314,6 +376,11 @@ class _BetScreenState extends State<BetScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (_loadingAuto) ...[
+                const LinearProgressIndicator(),
+                const SizedBox(height: 16),
+              ],
+
               const Text('Temporada:'),
               DropdownButton<String>(
                 isExpanded: true,
@@ -384,7 +451,10 @@ class _BetScreenState extends State<BetScreen> {
               const Text('Cantidad:'),
               TextField(
                 controller: _cantidadController,
-                keyboardType: TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [DecimalTextInputFormatter(decimalDigits: 2)],
                 decoration: const InputDecoration(hintText: '0.00'),
               ),
               const SizedBox(height: 16),
@@ -392,14 +462,17 @@ class _BetScreenState extends State<BetScreen> {
               const Text('Cuota:'),
               TextField(
                 controller: _cuotaController,
-                keyboardType: TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [DecimalTextInputFormatter(decimalDigits: 3)],
                 decoration: const InputDecoration(hintText: '0.00'),
               ),
               const SizedBox(height: 24),
 
               Center(
                 child: ElevatedButton.icon(
-                  onPressed: _saveBet,
+                  onPressed: _loadingAuto ? null : _saveBet,
                   icon: const Icon(Icons.save),
                   label: const Text('Guardar Apuesta'),
                 ),
