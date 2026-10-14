@@ -13,7 +13,7 @@ import 'package:plantillalogin/views/settingsScreen.dart';
 import 'package:plantillalogin/views/viewResultsScreen.dart';
 
 class MenuScreen extends StatelessWidget {
-  const MenuScreen({Key? key}) : super(key: key);
+  const MenuScreen({super.key});
 
   Future<void> _signOutAndGoToLogin(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
@@ -122,8 +122,8 @@ class _MenuButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
-    Key? key,
-  }) : super(key: key);
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {

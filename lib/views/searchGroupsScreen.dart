@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class JoinGroupScreen extends StatefulWidget {
-  const JoinGroupScreen({Key? key}) : super(key: key);
+  const JoinGroupScreen({super.key});
 
   @override
   _JoinGroupScreenState createState() => _JoinGroupScreenState();

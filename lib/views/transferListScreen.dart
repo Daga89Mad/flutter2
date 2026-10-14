@@ -29,8 +29,7 @@ class TransferListScreen extends StatefulWidget {
   final String groupId;
   final List<GroupMember>? members; // opcional: si se pasa, usamos alias
 
-  const TransferListScreen({Key? key, required this.groupId, this.members})
-    : super(key: key);
+  const TransferListScreen({super.key, required this.groupId, this.members});
 
   @override
   State<TransferListScreen> createState() => _TransferListScreenState();

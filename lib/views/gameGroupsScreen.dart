@@ -14,7 +14,7 @@ import '../models/group.dart';
 import '../models/group_member.dart';
 
 class GameGroupsScreen extends StatefulWidget {
-  const GameGroupsScreen({Key? key}) : super(key: key);
+  const GameGroupsScreen({super.key});
 
   @override
   _GameGroupsScreenState createState() => _GameGroupsScreenState();
@@ -227,12 +227,11 @@ class _GameGroupsScreenState extends State<GameGroupsScreen> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _selectedGroupId,
+                            initialValue: _selectedGroupId,
                             items: groups.map((g) {
                               // Ajusta g.name si tu modelo usa otro campo
-                              final displayName =
-                                  (g.nombre != null && g.nombre!.isNotEmpty)
-                                  ? g.nombre!
+                              final displayName = (g.nombre.isNotEmpty)
+                                  ? g.nombre
                                   : 'Grupo ${g.id}';
                               return DropdownMenuItem<String>(
                                 value: g.id,

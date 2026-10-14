@@ -9,8 +9,7 @@ class BetScreen extends StatefulWidget {
   final String groupId;
   final String uid;
 
-  const BetScreen({Key? key, required this.groupId, required this.uid})
-    : super(key: key);
+  const BetScreen({super.key, required this.groupId, required this.uid});
 
   @override
   _BetScreenState createState() => _BetScreenState();

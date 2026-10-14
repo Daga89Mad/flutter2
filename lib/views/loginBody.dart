@@ -1,6 +1,5 @@
 // lib/views/loginBody.dart
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/core/firebaseCrudService.dart';
 import 'package:plantillalogin/views/menu.dart';

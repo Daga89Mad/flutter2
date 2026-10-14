@@ -121,11 +121,13 @@ class _TransferScreenState extends State<TransferScreen> {
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty)
+                  if (value == null || value.trim().isEmpty) {
                     return 'Introduce una cantidad';
+                  }
                   final v = double.tryParse(value.trim().replaceAll(',', '.'));
-                  if (v == null || v <= 0)
+                  if (v == null || v <= 0) {
                     return 'Introduce una cantidad válida mayor que 0';
+                  }
                   return null;
                 },
               ),
@@ -133,7 +135,7 @@ class _TransferScreenState extends State<TransferScreen> {
 
               // Desplegable receptor
               DropdownButtonFormField<String>(
-                value: _selectedReceiverId,
+                initialValue: _selectedReceiverId,
                 decoration: const InputDecoration(
                   labelText: 'Receptor',
                   prefixIcon: Icon(Icons.person),
@@ -147,8 +149,9 @@ class _TransferScreenState extends State<TransferScreen> {
                 }).toList(),
                 onChanged: (val) => setState(() => _selectedReceiverId = val),
                 validator: (value) {
-                  if (value == null || value.isEmpty)
+                  if (value == null || value.isEmpty) {
                     return 'Selecciona un receptor';
+                  }
                   return null;
                 },
               ),

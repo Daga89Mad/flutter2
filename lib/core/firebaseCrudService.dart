@@ -263,7 +263,7 @@ class FirebaseCrudService {
           .get();
 
       for (var betDoc in querySnap.docs) {
-        final betData = betDoc.data() as Map<String, dynamic>;
+        final betData = betDoc.data();
 
         // Determinar la selección del usuario si existe (varios nombres posibles)
         String? pick =
@@ -431,7 +431,7 @@ class FirebaseCrudService {
     List<BetDetail> result = [];
 
     for (var doc in snapshot.docs) {
-      final data = doc.data() as Map<String, dynamic>;
+      final data = doc.data();
 
       final liga = data['Liga']?.toString() ?? '';
       final temporada = data['Temporada']?.toString() ?? legacySeason;
@@ -499,7 +499,7 @@ class FirebaseCrudService {
     final List<LastBetMatch> result = [];
 
     for (final doc in snapshot.docs) {
-      final data = doc.data() as Map<String, dynamic>;
+      final data = doc.data();
 
       final liga = data['Liga']?.toString() ?? '';
       final temporada = data['Temporada']?.toString() ?? legacySeason;

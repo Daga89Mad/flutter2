@@ -286,7 +286,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
           children: [
             DropdownButtonFormField<String>(
               decoration: const InputDecoration(labelText: 'Temporada'),
-              value: _selectedSeason,
+              initialValue: _selectedSeason,
               items: _seasons
                   .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                   .toList(),
@@ -301,7 +301,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
 
             DropdownButtonFormField<String>(
               decoration: const InputDecoration(labelText: 'Liga'),
-              value: _seleccion,
+              initialValue: _seleccion,
               items: _opciones
                   .map((op) => DropdownMenuItem(value: op, child: Text(op)))
                   .toList(),
