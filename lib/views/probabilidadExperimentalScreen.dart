@@ -49,7 +49,7 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
       _score(m['GolesLocal']) != null && _score(m['GolesVisitante']) != null;
 
   Future<void> _reviewEarlier() async {
-    for (var r = 1; r < round; r++) {
+    for (var r = 1; r <= round; r++) {
       final recorded = await _saved(r).get();
       if (recorded.docs.isEmpty) continue;
       final results = await _matches(r).get();
