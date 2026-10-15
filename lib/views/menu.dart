@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import 'package:plantillalogin/views/ClassificationScreen.dart';
+import 'package:plantillalogin/views/calculatorScreen.dart';
 import 'package:plantillalogin/views/LoginBody.dart';
 import 'package:plantillalogin/views/ResultsScreen.dart';
 import 'package:plantillalogin/views/createGroupScreen.dart';
@@ -46,12 +46,12 @@ class MenuScreen extends StatelessWidget {
               },
             ),
             _MenuButton(
-              icon: Icons.leaderboard,
-              label: 'Clasificación',
+              icon: Icons.calculate,
+              label: 'Calculadora',
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => const ClassificationScreen(),
+                    builder: (_) => const CalculatorScreen(),
                   ),
                 );
               },
