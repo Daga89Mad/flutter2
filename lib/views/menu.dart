@@ -11,6 +11,7 @@ import 'package:plantillalogin/views/gameGroupsScreen.dart';
 import 'package:plantillalogin/views/searchGroupsScreen.dart';
 import 'package:plantillalogin/views/settingsScreen.dart';
 import 'package:plantillalogin/views/viewResultsScreen.dart';
+import 'package:plantillalogin/views/probabilidadExperimentalScreen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
@@ -89,6 +90,17 @@ class MenuScreen extends StatelessWidget {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const JoinGroupScreen()),
+                );
+              },
+            ),
+            _MenuButton(
+              icon: Icons.analytics_outlined,
+              label: 'Probabilidad experimental',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const ProbabilidadExperimentalScreen(),
+                  ),
                 );
               },
             ),
