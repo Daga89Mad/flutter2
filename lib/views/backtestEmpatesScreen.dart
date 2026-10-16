@@ -22,6 +22,7 @@ class _Forecast {
 }
 class _BacktestState extends State<BacktestEmpatesScreen> {
  bool loading=false;
+ late String selectedLeague;
  String? error;
  int? maxRound;
  List<_Forecast> samples=[];
@@ -32,7 +33,7 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
    try {
      final rounds=<int,List<Map<String,dynamic>>>{};
      for(var j=1;j<=38;j++){
-       final snap=await FirebaseFirestore.instance.collection(widget.league)
+       final snap=await FirebaseFirestore.instance.collection(selectedLeague)
          .doc('Resultados').collection('Temporadas').doc(widget.season)
          .collection('Jornadas').doc('$j').collection('Partidos').get();
        rounds[j]=snap.docs.map((d)=>d.data()).toList();
@@ -82,7 +83,7 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
    }catch(e){if(mounted)setState(()=>error='$e');}
    finally{if(mounted)setState(()=>loading=false);}
  }
- @override void initState(){super.initState();_calculate();}
+ @override void initState(){super.initState();selectedLeague=widget.league;_calculate();}
  double _brier(bool a)=>samples.isEmpty?0:samples.fold<double>(0,(sum,p){
    final prob=a?p.a:p.b;return sum+math.pow(prob-(p.draw?1:0),2);
  })/samples.length;
@@ -97,7 +98,22 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
      body:loading?const Center(child:CircularProgressIndicator()):
       error!=null?Center(child:Text('Error leyendo Firebase: $error')):
        ListView(padding:const EdgeInsets.all(12),children:[
-         Text('${widget.league} · ${widget.season}',style:Theme.of(context).textTheme.titleLarge),
+         DropdownButtonFormField<String>(
+           value:selectedLeague,
+           decoration:const InputDecoration(labelText:'Liga'),
+           items:const [
+             DropdownMenuItem(value:'LaLiga',child:Text('España · LaLiga')),
+             DropdownMenuItem(value:'SerieA',child:Text('Italia · Serie A')),
+           ],
+           onChanged:loading?null:(value){
+             if(value!=null && value!=selectedLeague){
+               setState(()=>selectedLeague=value);
+               _calculate();
+             }
+           },
+         ),
+         const SizedBox(height:12),
+         Text(widget.season,style:Theme.of(context).textTheme.titleLarge),
          const SizedBox(height:8),
          const Text('Simulación retrospectiva. Cada jornada usa solo los resultados de jornadas anteriores. No son pronósticos registrados antes del partido.'),
          const SizedBox(height:12),
