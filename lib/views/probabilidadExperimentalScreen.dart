@@ -2,6 +2,8 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/core/goalDrawModel.dart';
+import 'package:plantillalogin/core/drawModelC.dart';
+import 'package:plantillalogin/core/drawModelD.dart';
 import 'package:plantillalogin/views/backtestEmpatesScreen.dart';
 import 'package:plantillalogin/views/configuracionEquiposEmpateScreen.dart';
 
@@ -13,8 +15,15 @@ class ProbabilidadExperimentalScreen extends StatefulWidget {
   State<ProbabilidadExperimentalScreen> createState() => _ProbabilidadExperimentalState();
 }
 class _TeamStats {
-  int games = 0, draws = 0, streak = 0;
-  void add(bool draw) { games++; if (draw) { draws++; streak = 0; } else { streak++; } }
+  int games = 0, draws = 0, streak = 0, points = 0;
+  int homeGames = 0, homeGoals = 0, awayGames = 0, awayGoals = 0;
+  void add({required bool draw, required bool home, required int scored, required int conceded}) {
+    games++;
+    if(draw){draws++;streak=0;points++;}
+    else {streak++;if(scored>conceded)points+=3;}
+    if(home){homeGames++;homeGoals+=scored;}
+    else {awayGames++;awayGoals+=scored;}
+  }
 }
 class _Prediction {
   final Map<String, dynamic> data;
@@ -25,6 +34,8 @@ class _Prediction {
   bool get reviewed => data['Revisado'] == true;
   bool get hit => data['Acertado'] == true;
   double? get goalProbability => (data['ProbabilidadGoles'] as num?)?.toDouble();
+  double? get modelC => (data['ProbabilidadC'] as num?)?.toDouble();
+  double? get modelD => (data['ProbabilidadD'] as num?)?.toDouble();
 }
 class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScreen> {
   final _db = FirebaseFirestore.instance;
@@ -103,10 +114,10 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
             final away = '${m['Visitante'] ?? ''}'.trim();
             if (home.isEmpty || away.isEmpty) continue;
             final draw = _score(m['GolesLocal']) == _score(m['GolesVisitante']);
-            (stats[home] ??= _TeamStats()).add(draw);
-            (stats[away] ??= _TeamStats()).add(draw);
             final hg = _score(m['GolesLocal'])!;
             final ag = _score(m['GolesVisitante'])!;
+            (stats[home] ??= _TeamStats()).add(draw:draw,home:true,scored:hg,conceded:ag);
+            (stats[away] ??= _TeamStats()).add(draw:draw,home:false,scored:ag,conceded:hg);
             (goalStats[home] ??= TeamGoalStats()).add(home:true,scored:hg,conceded:ag);
             (goalStats[away] ??= TeamGoalStats()).add(home:false,scored:ag,conceded:hg);
           }
@@ -139,10 +150,25 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
             homeStrength:strengths[home] ?? 0,
             awayStrength:strengths[away] ?? 0,
           );
+          final ppgDiff = a.games >= 5 && b.games >= 5
+              ? ((a.points/a.games)-(b.points/b.games)).abs() : null;
+          final combinedGoals = a.games >= 5 && b.games >= 5 &&
+                  a.homeGames >= 2 && b.awayGames >= 2
+              ? (a.homeGoals/a.homeGames)+(b.awayGoals/b.awayGames) : null;
+          final modelD = DrawModelD.predict(
+            pointsPerGameDifference:ppgDiff,
+            combinedVenueScoringAverage:combinedGoals,
+            eitherTeamEightWithoutDraw:a.streak>=8 || b.streak>=8);
+          final modelC = DrawModelC.predict(
+            home:goalStats[home] ?? TeamGoalStats(),
+            away:goalStats[away] ?? TeamGoalStats(),
+            homeStrength:strengths[home]??0,awayStrength:strengths[away]??0);
           batch.set(_saved(round).doc(doc.id), {
             'Local': home, 'Visitante': away, 'MatchId': doc.id,
             'Liga': league, 'Temporada': season, 'Jornada': round,
             'Probabilidad': probability,
+            'ProbabilidadC': modelC, 'ModeloC': DrawModelC.version,
+            'ProbabilidadD': modelD, 'ModeloD': DrawModelD.version,
             'ProbabilidadGoles': goalPrediction.probability,
             'GolesEsperadosLocal': goalPrediction.goalsHome,
             'GolesEsperadosVisitante': goalPrediction.goalsAway,
@@ -217,7 +243,7 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
             final p = predictions[i];
             return Card(child: ListTile(
               title: Text('${p.home} – ${p.away}'),
-              subtitle: Text('Modelo A: ${(p.probability * 100).toStringAsFixed(1)} %  ·  Modelo B: ${p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %'}'),
+              subtitle: Text('A: ${(p.probability*100).toStringAsFixed(1)} % · D: ${p.modelD==null ? '—' : '${(p.modelD!*100).toStringAsFixed(1)} %'} · C: ${p.modelC==null ? '—' : '${(p.modelC!*100).toStringAsFixed(1)} %'}'),
               trailing: p.reviewed ? Icon(p.hit ? Icons.check_circle : Icons.cancel,
                 color: p.hit ? Colors.green : Colors.red) : const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -292,35 +318,16 @@ class _PredictionDetail extends StatelessWidget {
             ]),
           ),
         ),
-        _section(context, 'Comparación de modelos', [
-          Row(children: [
-            Expanded(child: Column(children: [
-              const Text('A · Estadístico'),
-              const SizedBox(height: 5),
-              Text(_percent(p.probability),
-                style: Theme.of(context).textTheme.headlineSmall),
-            ])),
-            Expanded(child: Column(children: [
-              const Text('B · Goles (Poisson)'),
-              const SizedBox(height: 5),
-              Text(_percent(b),
-                style: Theme.of(context).textTheme.headlineSmall),
-            ])),
-          ]),
-          const SizedBox(height: 8),
-          _item('Cuota de equilibrio A', (1 / p.probability).toStringAsFixed(2)),
-          if (b != null)
-            _item('Cuota de equilibrio B', (1 / b).toStringAsFixed(2)),
-          if (b == null)
-            const Text('El Modelo B todavía no estaba guardado en este pronóstico.',
-              style: TextStyle(fontSize: 12, color: Colors.grey)),
+        _section(context, 'Probabilidades de empate', [
+          _item('A · Empates históricos', _percent(p.probability)),
+          _item('D · Factores del partido', _percent(p.modelD)),
+          _item('C · Dixon-Coles (provisional)', _percent(p.modelC)),
+          _item('Cuota teórica A', (1/p.probability).toStringAsFixed(2)),
+          if(p.modelD!=null) _item('Cuota teórica D', (1/p.modelD!).toStringAsFixed(2)),
+          if(p.modelC!=null) _item('Cuota teórica C', (1/p.modelC!).toStringAsFixed(2)),
+          if(p.modelD==null || p.modelC==null)
+            const Text('Los modelos nuevos no existían cuando se guardó este pronóstico.'),
         ]),
-        if (d['GolesEsperadosLocal'] is num &&
-            d['GolesEsperadosVisitante'] is num)
-          _section(context, 'Goles previstos · Modelo B', [
-            _item(p.home, (d['GolesEsperadosLocal'] as num).toStringAsFixed(2)),
-            _item(p.away, (d['GolesEsperadosVisitante'] as num).toStringAsFixed(2)),
-          ]),
         _section(context, 'Historial antes del partido', [
           Text(p.home, style: const TextStyle(fontWeight: FontWeight.bold)),
           _item('Empates / encuentros',
@@ -335,18 +342,11 @@ class _PredictionDetail extends StatelessWidget {
           _item('Tendencia estimada',
               _percent(d['ProbabilidadVisitante'] as num?)),
         ]),
-        _section(context, 'Sobre el cálculo', [
-          const Text('Modelo A: analiza los empates anteriores de los dos equipos '
-              'con un ajuste estadístico para evitar resultados extremos.'),
-          const SizedBox(height: 8),
-          const Text('Modelo B: estima los goles de ambos equipos y suma '
-              'las probabilidades de marcadores empatados.'),
-          const SizedBox(height: 8),
-          _item('Versión del modelo A', '${d['Modelo'] ?? 'No disponible'}'),
-          _item('Versión del modelo B', '${d['ModeloGoles'] ?? 'No disponible'}'),
-          const Text('Los identificadores de versión permiten comparar '
-              'fórmulas y conservar el método original de cada pronóstico.',
-              style: TextStyle(fontSize: 12, color: Colors.grey)),
+        _section(context, 'Versiones y método', [
+          _item('Modelo A', '${d['Modelo']??'beta-logit-v1'}'),
+          _item('Modelo D', '${d['ModeloD']??'Sin datos'}'),
+          _item('Modelo C', '${d['ModeloC']??'Sin datos'}'),
+          const Text('D usa diferencia de puntos, goles y rachas. C ajusta marcadores de pocos goles; sus parámetros son todavía provisionales. Las versiones identifican exactamente qué fórmula generó cada pronóstico.'),
         ]),
       ]),
     );
