@@ -60,6 +60,22 @@ class _ResultsScreenState extends State<ResultsScreen> {
     super.dispose();
   }
 
+  // Los errores del proveedor externo no deben bloquear la entrada manual.
+  Future<http.Response> _getWithRetry(Uri uri) async {
+    http.Response? last;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        last = await http.get(uri).timeout(const Duration(seconds: 20));
+        if (last.statusCode == 200) return last;
+        if (last.statusCode < 500 || attempt == 1) return last;
+      } catch (_) {
+        if (attempt == 1) rethrow;
+      }
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+    return last!;
+  }
+
   /// Carga la última jornada de la temporada y la sugiere en el TextField
   Future<void> _loadLastRound() async {
     setState(() {
@@ -75,7 +91,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
     );
 
     try {
-      final resp = await http.get(uriSeason);
+      final resp = await _getWithRetry(uriSeason);
       if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
 
       final data = json.decode(resp.body) as Map<String, dynamic>;
@@ -98,7 +114,10 @@ class _ResultsScreenState extends State<ResultsScreen> {
       _lastRound = rounds.reduce((a, b) => a > b ? a : b);
       _roundController.text = _lastRound.toString();
     } catch (e) {
-      setState(() => _error = 'Error cargando última jornada: $e');
+      // La detección automática es opcional: dejar disponible la jornada manual.
+      if (mounted) setState(() => _error =
+        'No se pudo detectar la última jornada (proveedor: $e). '
+        'Puedes introducir una jornada manualmente y pulsar Cargar jornada.');
     } finally {
       setState(() => _cargando = false);
     }
@@ -121,7 +140,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
     );
 
     try {
-      final resp = await http.get(uriRound);
+      final resp = await _getWithRetry(uriRound);
       if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
 
       final data = json.decode(resp.body) as Map<String, dynamic>;
@@ -134,7 +153,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
         }
       });
     } catch (e) {
-      setState(() => _error = 'Error cargando jornada $round: $e');
+      if (mounted) setState(() => _error =
+        'No se pudo consultar la jornada $round ($e). '
+        'El proveedor externo puede estar temporalmente caído; vuelve a intentarlo.');
     } finally {
       setState(() => _cargando = false);
     }
