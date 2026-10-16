@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:plantillalogin/core/goalDrawModel.dart';
+import 'package:plantillalogin/views/configuracionEquiposEmpateScreen.dart';
 
 /// Investigación independiente: no modifica apuestas ni resultados.
 /// Las predicciones se congelan antes de conocerse ningún resultado de la jornada.
@@ -21,6 +23,7 @@ class _Prediction {
   double get probability => (data['Probabilidad'] as num).toDouble();
   bool get reviewed => data['Revisado'] == true;
   bool get hit => data['Acertado'] == true;
+  double? get goalProbability => (data['ProbabilidadGoles'] as num?)?.toDouble();
 }
 class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScreen> {
   final _db = FirebaseFirestore.instance;
@@ -89,6 +92,7 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
           return;
         }
         final stats = <String, _TeamStats>{};
+        final goalStats = <String, TeamGoalStats>{};
         for (var r = 1; r < round; r++) {
           final old = await _matches(r).get();
           for (final match in old.docs) {
@@ -100,8 +104,18 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
             final draw = _score(m['GolesLocal']) == _score(m['GolesVisitante']);
             (stats[home] ??= _TeamStats()).add(draw);
             (stats[away] ??= _TeamStats()).add(draw);
+            final hg = _score(m['GolesLocal'])!;
+            final ag = _score(m['GolesVisitante'])!;
+            (goalStats[home] ??= TeamGoalStats()).add(home:true,scored:hg,conceded:ag);
+            (goalStats[away] ??= TeamGoalStats()).add(home:false,scored:ag,conceded:hg);
           }
         }
+        final strengthDocs = await _db.collection('ConfiguracionEmpates')
+          .doc(league).collection('Equipos').get();
+        final strengths = <String,double>{
+          for(final d in strengthDocs.docs)
+            if(d.data()['Fuerza'] is num) d.id:(d.data()['Fuerza'] as num).toDouble()
+        };
         const baseline = .27, strength = 12.0;
         double logit(double p) => math.log(p / (1 - p));
         final batch = _db.batch();
@@ -118,10 +132,23 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
               .5 * (logit(pa) - logit(baseline)) +
               .5 * (logit(pb) - logit(baseline));
           final probability = 1 / (1 + math.exp(-logOdds));
+          final goalPrediction = GoalDrawModel.predict(
+            home:goalStats[home] ?? TeamGoalStats(),
+            away:goalStats[away] ?? TeamGoalStats(),
+            homeStrength:strengths[home] ?? 0,
+            awayStrength:strengths[away] ?? 0,
+          );
           batch.set(_saved(round).doc(doc.id), {
             'Local': home, 'Visitante': away, 'MatchId': doc.id,
             'Liga': league, 'Temporada': season, 'Jornada': round,
-            'Probabilidad': probability, 'ProbabilidadLocal': pa,
+            'Probabilidad': probability,
+            'ProbabilidadGoles': goalPrediction.probability,
+            'GolesEsperadosLocal': goalPrediction.goalsHome,
+            'GolesEsperadosVisitante': goalPrediction.goalsAway,
+            'FuerzaLocal': strengths[home] ?? 0,
+            'FuerzaVisitante': strengths[away] ?? 0,
+            'ModeloGoles': 'poisson-localia-v1',
+            'ProbabilidadLocal': pa,
             'ProbabilidadVisitante': pb,
             'EmpatesLocal': a.draws, 'PartidosLocal': a.games,
             'RachaLocal': a.streak, 'EmpatesVisitante': b.draws,
@@ -145,7 +172,11 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Probabilidad experimental')),
+    appBar: AppBar(title: const Text('Probabilidad experimental'), actions: [
+      IconButton(icon:const Icon(Icons.admin_panel_settings),
+        tooltip:'Clasificar equipos', onPressed:()=>Navigator.of(context).push(
+          MaterialPageRoute(builder:(_)=>ConfiguracionEquiposEmpateScreen(league:league,season:season)))),
+    ]),
     body: Padding(
       padding: const EdgeInsets.all(12),
       child: Column(children: [
@@ -177,7 +208,7 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
             final p = predictions[i];
             return Card(child: ListTile(
               title: Text('${p.home} – ${p.away}'),
-              subtitle: Text('Empate: ${(p.probability * 100).toStringAsFixed(1)} %'),
+              subtitle: Text('Modelo A: ${(p.probability * 100).toStringAsFixed(1)} %  ·  Modelo B: ${p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %'}'),
               trailing: p.reviewed ? Icon(p.hit ? Icons.check_circle : Icons.cancel,
                 color: p.hit ? Colors.green : Colors.red) : const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -206,7 +237,11 @@ class _PredictionDetail extends StatelessWidget {
         const SizedBox(height: 12),
         Text('${(p.probability * 100).toStringAsFixed(1)} % de empate (experimental)',
           style: Theme.of(context).textTheme.headlineSmall),
-        metric('Cuota teórica de equilibrio', (1 / p.probability).toStringAsFixed(2)),
+        metric('Cuota teórica de equilibrio A', (1 / p.probability).toStringAsFixed(2)),
+        metric('Modelo B · Poisson', p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %'),
+        if(p.goalProbability != null) metric('Cuota de equilibrio B', (1/p.goalProbability!).toStringAsFixed(2)),
+        if(d['GolesEsperadosLocal'] is num) metric('Goles esperados local', (d['GolesEsperadosLocal'] as num).toStringAsFixed(2)),
+        if(d['GolesEsperadosVisitante'] is num) metric('Goles esperados visitante', (d['GolesEsperadosVisitante'] as num).toStringAsFixed(2)),
         const Divider(),
         Text(p.home, style: Theme.of(context).textTheme.titleMedium),
         metric('Empates / partidos anteriores',
