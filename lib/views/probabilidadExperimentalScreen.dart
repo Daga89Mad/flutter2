@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/core/goalDrawModel.dart';
+import 'package:plantillalogin/views/backtestEmpatesScreen.dart';
 import 'package:plantillalogin/views/configuracionEquiposEmpateScreen.dart';
 
 /// Investigación independiente: no modifica apuestas ni resultados.
@@ -173,6 +174,14 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Probabilidad experimental'), actions: [
+      IconButton(
+        icon: const Icon(Icons.query_stats),
+        tooltip: 'Comparar jornadas anteriores',
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => BacktestEmpatesScreen(league: league, season: season),
+        )),
+      ),
+
       IconButton(icon:const Icon(Icons.admin_panel_settings),
         tooltip:'Clasificar equipos', onPressed:()=>Navigator.of(context).push(
           MaterialPageRoute(builder:(_)=>ConfiguracionEquiposEmpateScreen(league:league,season:season)))),
