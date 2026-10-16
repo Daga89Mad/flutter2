@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:plantillalogin/core/goalDrawModel.dart';
 import 'package:plantillalogin/views/configuracionEquiposEmpateScreen.dart';
 
@@ -34,19 +33,13 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
   bool loading = false;
   String? error;
   List<_Prediction> predictions = [];
-  bool isAdmin = false;
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
     final year = now.month >= 7 ? now.year : now.year - 1;
     season = '$year-${year + 1}';
-    _checkAdmin();
     _load();
-  }
-  Future<void> _checkAdmin() async {
-    final token = await FirebaseAuth.instance.currentUser?.getIdTokenResult();
-    if (mounted) setState(() => isAdmin = token?.claims?['admin'] == true);
   }
   CollectionReference<Map<String, dynamic>> _matches(int r) =>
       _db.collection(league).doc('Resultados').collection('Temporadas')
@@ -180,7 +173,7 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Probabilidad experimental'), actions: [
-      if(isAdmin) IconButton(icon:const Icon(Icons.admin_panel_settings),
+      IconButton(icon:const Icon(Icons.admin_panel_settings),
         tooltip:'Clasificar equipos', onPressed:()=>Navigator.of(context).push(
           MaterialPageRoute(builder:(_)=>ConfiguracionEquiposEmpateScreen(league:league,season:season)))),
     ]),
