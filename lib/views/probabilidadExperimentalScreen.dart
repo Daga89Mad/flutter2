@@ -24,6 +24,7 @@ class _Prediction {
   bool get reviewed => data['Revisado'] == true;
   bool get hit => data['Acertado'] == true;
   double? get goalProbability => (data['ProbabilidadGoles'] as num?)?.toDouble();
+  bool get retrospectiveB => data['ModeloGoles'] == 'simulacion-retrospectiva';
 }
 class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScreen> {
   final _db = FirebaseFirestore.instance;
@@ -160,7 +161,47 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
         await batch.commit();
       }
       final recorded = await _saved(round).get();
-      final items = recorded.docs.map((d) => _Prediction(d.data())).toList()
+      // Compatibilidad: B no existía cuando se guardaron los pronósticos A.
+      // Reconstruimos una simulación visual con jornadas ANTERIORES únicamente.
+      // No se escribe en Firestore ni se evalúa como predicción real.
+      final missingB = recorded.docs.any((d) => d.data()['ProbabilidadGoles'] == null);
+      final retrospective = <String, Map<String, dynamic>>{};
+      if (missingB) {
+        final history = <String, TeamGoalStats>{};
+        for (var r = 1; r < round; r++) {
+          final old = await _matches(r).get();
+          for (final match in old.docs) {
+            final m = match.data();
+            if (!_finished(m)) continue;
+            final home = '${m['Local'] ?? ''}'.trim();
+            final away = '${m['Visitante'] ?? ''}'.trim();
+            final hg = _score(m['GolesLocal'])!;
+            final ag = _score(m['GolesVisitante'])!;
+            if (home.isEmpty || away.isEmpty) continue;
+            (history[home] ??= TeamGoalStats()).add(home: true, scored: hg, conceded: ag);
+            (history[away] ??= TeamGoalStats()).add(home: false, scored: ag, conceded: hg);
+          }
+        }
+        // Fuerza neutra: la configuración manual actual puede ser distinta
+        // de la que existía antes de generar el pronóstico.
+        for (final d in recorded.docs) {
+          final data = d.data();
+          if (data['ProbabilidadGoles'] != null) continue;
+          final home = '${data['Local'] ?? ''}'.trim();
+          final away = '${data['Visitante'] ?? ''}'.trim();
+          final result = GoalDrawModel.predict(
+            home: history[home] ?? TeamGoalStats(),
+            away: history[away] ?? TeamGoalStats(),
+          );
+          retrospective[d.id] = {
+            'ProbabilidadGoles': result.probability,
+            'GolesEsperadosLocal': result.goalsHome,
+            'GolesEsperadosVisitante': result.goalsAway,
+            'ModeloGoles': 'simulacion-retrospectiva',
+          };
+        }
+      }
+      final items = recorded.docs.map((d) => _Prediction({...d.data(), ...?retrospective[d.id]})).toList()
         ..sort((a, b) => b.probability.compareTo(a.probability));
       if (mounted) setState(() => predictions = items);
     } catch (e) {
@@ -208,7 +249,7 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
             final p = predictions[i];
             return Card(child: ListTile(
               title: Text('${p.home} – ${p.away}'),
-              subtitle: Text('Modelo A: ${(p.probability * 100).toStringAsFixed(1)} %  ·  Modelo B: ${p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %'}'),
+              subtitle: Text('Modelo A: ${(p.probability * 100).toStringAsFixed(1)} %  ·  Modelo B: ${p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %${p.retrospectiveB ? ' (simulado)' : ''}'}'),
               trailing: p.reviewed ? Icon(p.hit ? Icons.check_circle : Icons.cancel,
                 color: p.hit ? Colors.green : Colors.red) : const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -239,6 +280,7 @@ class _PredictionDetail extends StatelessWidget {
           style: Theme.of(context).textTheme.headlineSmall),
         metric('Cuota teórica de equilibrio A', (1 / p.probability).toStringAsFixed(2)),
         metric('Modelo B · Poisson', p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %'),
+        if(p.retrospectiveB) const Padding(padding: EdgeInsets.all(8), child: Text('Simulación retrospectiva con jornadas anteriores y fuerza neutra. No fue guardada antes del partido ni cuenta como pronóstico acertado.')),
         if(p.goalProbability != null) metric('Cuota de equilibrio B', (1/p.goalProbability!).toStringAsFixed(2)),
         if(d['GolesEsperadosLocal'] is num) metric('Goles esperados local', (d['GolesEsperadosLocal'] as num).toStringAsFixed(2)),
         if(d['GolesEsperadosVisitante'] is num) metric('Goles esperados visitante', (d['GolesEsperadosVisitante'] as num).toStringAsFixed(2)),
