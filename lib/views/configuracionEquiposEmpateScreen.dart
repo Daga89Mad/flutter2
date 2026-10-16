@@ -1,8 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-/// Requiere un custom claim admin=true concedido desde un entorno de confianza.
+/// Clasificación opcional compartida por usuarios autenticados.
 class ConfiguracionEquiposEmpateScreen extends StatefulWidget {
   final String league;
   final String season;
@@ -11,7 +10,7 @@ class ConfiguracionEquiposEmpateScreen extends StatefulWidget {
   State<ConfiguracionEquiposEmpateScreen> createState()=>_ConfigState();
 }
 class _ConfigState extends State<ConfiguracionEquiposEmpateScreen> {
-  bool loading=true; String? error; bool admin=false;
+  bool loading=true; String? error;
   List<String> teams=[];
   Map<String,double> values={};
   CollectionReference<Map<String,dynamic>> get _col =>
@@ -20,9 +19,6 @@ class _ConfigState extends State<ConfiguracionEquiposEmpateScreen> {
   @override void initState(){super.initState();_load();}
   Future<void> _load() async {
     try {
-      final claims=await FirebaseAuth.instance.currentUser?.getIdTokenResult(true);
-      admin=claims?.claims?['admin']==true;
-      if(!admin){error='Solo disponible para administradores (claim admin=true).';return;}
       final all=<String>{};
       for(var r=1;r<=38;r++){
         final q=await FirebaseFirestore.instance.collection(widget.league)
