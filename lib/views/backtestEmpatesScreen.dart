@@ -2,6 +2,8 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/core/goalDrawModel.dart';
+import 'package:plantillalogin/core/drawModelC.dart';
+import 'package:plantillalogin/core/drawModelD.dart';
 
 /// Backtest exploratorio, nunca se escriben apuestas ni pronósticos.
 /// En cada jornada solo se usan marcadores de jornadas anteriores.
@@ -14,15 +16,17 @@ class BacktestEmpatesScreen extends StatefulWidget {
   @override
   State<BacktestEmpatesScreen> createState()=>_BacktestState();
 }
-class _DrawStats {int played=0,draws=0;}
+class _DrawStats {int played=0,draws=0,streak=0,points=0,homeGames=0,awayGames=0,homeGoals=0,awayGoals=0;}
 class _Forecast {
  final int round;final String home,away;
- final double a,b;final bool draw;
- const _Forecast(this.round,this.home,this.away,this.a,this.b,this.draw);
+ final double a,d,c;final bool draw;
+ const _Forecast(this.round,this.home,this.away,this.a,this.d,this.c,this.draw);
+ double prob(String model)=>model=='D'?d:model=='C'?c:a;
 }
 class _BacktestState extends State<BacktestEmpatesScreen> {
  bool loading=false;
  late String selectedLeague;
+ String selectedModel='A';
  String? error;
  int? maxRound;
  List<_Forecast> samples=[];
@@ -58,11 +62,16 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
          final z=logit(prior)+.5*(logit(ph)-logit(prior))+
              .5*(logit(pa)-logit(prior));
          final modelA=1/(1+math.exp(-z));
-         final modelB=GoalDrawModel.predict(
-           home:goals[home]??TeamGoalStats(),
-           away:goals[away]??TeamGoalStats(),
-         ).probability;
-         output.add(_Forecast(j,home,away,modelA,modelB,hg==ag));
+         final ppg=h.played>=5&&a.played>=5
+           ? ((h.points/h.played)-(a.points/a.played)).abs():null;
+         final scoring=h.played>=5&&a.played>=5&&h.homeGames>=2&&a.awayGames>=2
+           ? h.homeGoals/h.homeGames+a.awayGoals/a.awayGames:null;
+         final modelD=DrawModelD.predict(pointsPerGameDifference:ppg,
+           combinedVenueScoringAverage:scoring,
+           eitherTeamEightWithoutDraw:h.streak>=8||a.streak>=8);
+         final modelC=DrawModelC.predict(
+           home:goals[home]??TeamGoalStats(),away:goals[away]??TeamGoalStats());
+         output.add(_Forecast(j,home,away,modelA,modelD,modelC,hg==ag));
        }
        // Now learn results, only for the NEXT round.
        for(final m in games){
@@ -72,8 +81,13 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
          if(home.isEmpty||away.isEmpty)continue;
          for(final name in [home,away]){
            final x=team.putIfAbsent(name,()=>_DrawStats());
+           final local=name==home;
+           final scored=local?hg:ag,conceded=local?ag:hg;
            x.played++;
-           if(hg==ag)x.draws++;
+           if(hg==ag){x.draws++;x.points++;x.streak=0;}
+           else{x.streak++;if(scored>conceded)x.points+=3;}
+           if(local){x.homeGames++;x.homeGoals+=scored;}
+           else{x.awayGames++;x.awayGoals+=scored;}
          }
          (goals[home]??=TeamGoalStats()).add(home:true,scored:hg,conceded:ag);
          (goals[away]??=TeamGoalStats()).add(home:false,scored:ag,conceded:hg);
@@ -84,20 +98,19 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
    finally{if(mounted)setState(()=>loading=false);}
  }
  @override void initState(){super.initState();selectedLeague=widget.league;_calculate();}
- double _brier(bool a)=>samples.isEmpty?0:samples.fold<double>(0,(sum,p){
-   final prob=a?p.a:p.b;return sum+math.pow(prob-(p.draw?1:0),2);
+ double _brier(String model)=>samples.isEmpty?0:samples.fold<double>(0,(sum,p){
+   final prob=p.prob(model);return sum+math.pow(prob-(p.draw?1:0),2);
  })/samples.length;
- int _topDraws(bool a,int count){
-   final sorted=[...samples]..sort((x,y)=>(a?y.a:y.b).compareTo(a?x.a:x.b));
+ int _topDraws(String model,int count){
+   final sorted=[...samples]..sort((x,y)=>y.prob(model).compareTo(x.prob(model)));
    return sorted.take(count).where((x)=>x.draw).length;
  }
  @override Widget build(BuildContext context){
-   final sorted=[...samples]..sort((x,y)=>y.a.compareTo(x.a));
+   final rounds=samples.map((e)=>e.round).toSet().toList()..sort();
    final count=math.min(20,samples.length);
    return Scaffold(appBar:AppBar(title:const Text('Backtest histórico')),
-     body:loading?const Center(child:CircularProgressIndicator()):
-      error!=null?Center(child:Text('Error leyendo Firebase: $error')):
-       ListView(padding:const EdgeInsets.all(12),children:[
+     body:Column(children:[
+       Padding(padding:const EdgeInsets.all(12),child:Column(children:[
          DropdownButtonFormField<String>(
            value:selectedLeague,
            decoration:const InputDecoration(labelText:'Liga'),
@@ -105,30 +118,48 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
              DropdownMenuItem(value:'LaLiga',child:Text('España · LaLiga')),
              DropdownMenuItem(value:'SerieA',child:Text('Italia · Serie A')),
            ],
-           onChanged:loading?null:(value){
-             if(value!=null && value!=selectedLeague){
-               setState(()=>selectedLeague=value);
-               _calculate();
-             }
-           },
+           onChanged:loading?null:(v){if(v!=null&&v!=selectedLeague){
+             setState(()=>selectedLeague=v);_calculate();
+           }},
          ),
-         const SizedBox(height:12),
-         Text(widget.season,style:Theme.of(context).textTheme.titleLarge),
          const SizedBox(height:8),
-         const Text('Simulación retrospectiva. Cada jornada usa solo los resultados de jornadas anteriores. No son pronósticos registrados antes del partido.'),
-         const SizedBox(height:12),
-         Text('Partidos con marcador: ${samples.length} · Empates: ${samples.where((p)=>p.draw).length}'),
-         Text('Brier A: ${_brier(true).toStringAsFixed(4)} · Brier B: ${_brier(false).toStringAsFixed(4)}'),
-         Text('Top $count por A: ${_topDraws(true,count)} empates · Top $count por B: ${_topDraws(false,count)} empates'),
-         const Divider(),
-         const Text('Partidos ordenados por probabilidad del Modelo A'),
-         ...sorted.map((p)=>Card(child:ListTile(
-           title:Text('J${p.round} · ${p.home} – ${p.away}'),
-           subtitle:Text('A ${(p.a*100).toStringAsFixed(1)} % · B ${(p.b*100).toStringAsFixed(1)} %'),
-           trailing:Icon(p.draw?Icons.check_circle:Icons.cancel,
-             color:p.draw?Colors.green:Colors.red),
-         ))),
-       ]),
+         DropdownButtonFormField<String>(
+           value:selectedModel,decoration:const InputDecoration(labelText:'Ordenar cada jornada por'),
+           items:const [
+             DropdownMenuItem(value:'A',child:Text('Modelo A')),
+             DropdownMenuItem(value:'D',child:Text('Modelo D')),
+             DropdownMenuItem(value:'C',child:Text('Modelo C (provisional)')),
+           ],
+           onChanged:(v){if(v!=null)setState(()=>selectedModel=v);},
+         ),
+       ])),
+       if(loading)const LinearProgressIndicator(),
+       if(error!=null)Text('Error leyendo Firebase: $error'),
+       if(!loading&&error==null)Expanded(child:ListView(
+         padding:const EdgeInsets.all(12),children:[
+           Text('${widget.season} · ${samples.length} partidos'),
+           Text('Brier A: ${_brier("A").toStringAsFixed(4)} · D: ${_brier("D").toStringAsFixed(4)} · C: ${_brier("C").toStringAsFixed(4)}'),
+           Text('Top $count: A ${_topDraws("A",count)} · D ${_topDraws("D",count)} · C ${_topDraws("C",count)} empates'),
+           const Padding(padding:EdgeInsets.symmetric(vertical:10),child:Text(
+             'Backtest retrospectivo por jornada. Los aplazamientos pueden alterar la cronología real. Modelo C con parámetros provisionales.')),
+           ...rounds.map((r){
+             final games=samples.where((e)=>e.round==r).toList()
+               ..sort((x,y)=>y.prob(selectedModel).compareTo(x.prob(selectedModel)));
+             return Card(child:ExpansionTile(
+               initiallyExpanded:r==rounds.last,
+               title:Text('Jornada $r'),
+               subtitle:Text('${games.length} partidos · ${games.where((m)=>m.draw).length} empates'),
+               children:games.map((p)=>ListTile(
+                 title:Text('${p.home} – ${p.away}'),
+                 subtitle:Text('A ${(p.a*100).toStringAsFixed(1)} % · D ${(p.d*100).toStringAsFixed(1)} % · C ${(p.c*100).toStringAsFixed(1)} %'),
+                 trailing:Icon(p.draw?Icons.check_circle:Icons.cancel,
+                   color:p.draw?Colors.green:Colors.red),
+               )).toList(),
+             ));
+           }),
+         ],
+       )),
+     ]),
    );
  }
 }
