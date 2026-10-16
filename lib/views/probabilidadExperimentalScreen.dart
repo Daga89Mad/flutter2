@@ -233,43 +233,121 @@ class _ProbabilidadExperimentalState extends State<ProbabilidadExperimentalScree
 class _PredictionDetail extends StatelessWidget {
   final _Prediction prediction;
   const _PredictionDetail(this.prediction);
+
+  String _percent(num? value) =>
+      value == null ? 'Sin datos' : '${(value * 100).toStringAsFixed(1)} %';
+
+  Widget _item(String name, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 7),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: Text(name, style: const TextStyle(fontSize: 13))),
+      const SizedBox(width: 8),
+      Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+    ]),
+  );
+
+  Widget _section(BuildContext context, String title, List<Widget> children) =>
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 9),
+            ...children,
+          ]),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final p = prediction;
     final d = p.data;
-    Widget metric(String label, Object? value) => ListTile(
-      title: Text(label), trailing: Text('$value'));
+    final b = p.goalProbability;
+    final result = p.reviewed
+        ? (p.hit ? 'Empate acertado' : 'No hubo empate')
+        : 'Partido pendiente';
+    final statusColor = p.reviewed
+        ? (p.hit ? Colors.green : Colors.red)
+        : Colors.blueGrey;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Análisis del empate')),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
-        Text('${p.home} - ${p.away}', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 12),
-        Text('${(p.probability * 100).toStringAsFixed(1)} % de empate (experimental)',
-          style: Theme.of(context).textTheme.headlineSmall),
-        metric('Cuota teórica de equilibrio A', (1 / p.probability).toStringAsFixed(2)),
-        metric('Modelo B · Poisson', p.goalProbability == null ? 'Sin datos' : '${(p.goalProbability! * 100).toStringAsFixed(1)} %'),
-        if(p.goalProbability != null) metric('Cuota de equilibrio B', (1/p.goalProbability!).toStringAsFixed(2)),
-        if(d['GolesEsperadosLocal'] is num) metric('Goles esperados local', (d['GolesEsperadosLocal'] as num).toStringAsFixed(2)),
-        if(d['GolesEsperadosVisitante'] is num) metric('Goles esperados visitante', (d['GolesEsperadosVisitante'] as num).toStringAsFixed(2)),
-        const Divider(),
-        Text(p.home, style: Theme.of(context).textTheme.titleMedium),
-        metric('Empates / partidos anteriores',
-          '${d['EmpatesLocal']} / ${d['PartidosLocal']}'),
-        metric('Racha previa sin empatar', d['RachaLocal']),
-        metric('Probabilidad individual',
-          '${((d['ProbabilidadLocal'] as num) * 100).toStringAsFixed(1)} %'),
-        const Divider(),
-        Text(p.away, style: Theme.of(context).textTheme.titleMedium),
-        metric('Empates / partidos anteriores',
-          '${d['EmpatesVisitante']} / ${d['PartidosVisitante']}'),
-        metric('Racha previa sin empatar', d['RachaVisitante']),
-        metric('Probabilidad individual',
-          '${((d['ProbabilidadVisitante'] as num) * 100).toStringAsFixed(1)} %'),
-        const Divider(),
-        metric('Modelo', d['Modelo']),
-        metric('Evaluación', p.reviewed
-            ? (p.hit ? 'Acierto ✓' : 'Fallo ✕') : 'Pendiente'),
-        const Text('Pronóstico orientativo. No presupone que una racha de fallos aumente la probabilidad.'),
+      body: ListView(padding: const EdgeInsets.all(12), children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(children: [
+              Text('${p.home}  vs  ${p.away}',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(p.reviewed
+                    ? (p.hit ? Icons.check_circle : Icons.cancel)
+                    : Icons.schedule, color: statusColor),
+                const SizedBox(width: 8),
+                Text(result, style: TextStyle(color: statusColor,
+                    fontWeight: FontWeight.w600)),
+              ]),
+            ]),
+          ),
+        ),
+        _section(context, 'Comparación de modelos', [
+          Row(children: [
+            Expanded(child: Column(children: [
+              const Text('A · Estadístico'),
+              const SizedBox(height: 5),
+              Text(_percent(p.probability),
+                style: Theme.of(context).textTheme.headlineSmall),
+            ])),
+            Expanded(child: Column(children: [
+              const Text('B · Goles (Poisson)'),
+              const SizedBox(height: 5),
+              Text(_percent(b),
+                style: Theme.of(context).textTheme.headlineSmall),
+            ])),
+          ]),
+          const SizedBox(height: 8),
+          _item('Cuota de equilibrio A', (1 / p.probability).toStringAsFixed(2)),
+          if (b != null)
+            _item('Cuota de equilibrio B', (1 / b).toStringAsFixed(2)),
+          if (b == null)
+            const Text('El Modelo B todavía no estaba guardado en este pronóstico.',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+        ]),
+        if (d['GolesEsperadosLocal'] is num &&
+            d['GolesEsperadosVisitante'] is num)
+          _section(context, 'Goles previstos · Modelo B', [
+            _item(p.home, (d['GolesEsperadosLocal'] as num).toStringAsFixed(2)),
+            _item(p.away, (d['GolesEsperadosVisitante'] as num).toStringAsFixed(2)),
+          ]),
+        _section(context, 'Historial antes del partido', [
+          Text(p.home, style: const TextStyle(fontWeight: FontWeight.bold)),
+          _item('Empates / encuentros',
+              '${d['EmpatesLocal']} / ${d['PartidosLocal']}'),
+          _item('Partidos seguidos sin empatar', '${d['RachaLocal']}'),
+          _item('Tendencia estimada', _percent(d['ProbabilidadLocal'] as num?)),
+          const Divider(),
+          Text(p.away, style: const TextStyle(fontWeight: FontWeight.bold)),
+          _item('Empates / encuentros',
+              '${d['EmpatesVisitante']} / ${d['PartidosVisitante']}'),
+          _item('Partidos seguidos sin empatar', '${d['RachaVisitante']}'),
+          _item('Tendencia estimada',
+              _percent(d['ProbabilidadVisitante'] as num?)),
+        ]),
+        _section(context, 'Sobre el cálculo', [
+          const Text('Modelo A: analiza los empates anteriores de los dos equipos '
+              'con un ajuste estadístico para evitar resultados extremos.'),
+          const SizedBox(height: 8),
+          const Text('Modelo B: estima los goles de ambos equipos y suma '
+              'las probabilidades de marcadores empatados.'),
+          const SizedBox(height: 8),
+          _item('Versión del modelo A', '${d['Modelo'] ?? 'No disponible'}'),
+          _item('Versión del modelo B', '${d['ModeloGoles'] ?? 'No disponible'}'),
+          const Text('Los identificadores de versión permiten comparar '
+              'fórmulas y conservar el método original de cada pronóstico.',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+        ]),
       ]),
     );
   }
