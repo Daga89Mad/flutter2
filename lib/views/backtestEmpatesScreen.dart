@@ -27,6 +27,7 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
  bool loading=false;
  late String selectedLeague;
  String selectedModel='A';
+ double threshold=31;
  String? error;
  int? maxRound;
  List<_Forecast> samples=[];
@@ -105,6 +106,43 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
    final sorted=[...samples]..sort((x,y)=>y.prob(model).compareTo(x.prob(model)));
    return sorted.take(count).where((x)=>x.draw).length;
  }
+  Widget _thresholdReport() {
+    final cut=threshold/100;
+    Widget rowFor(String model) {
+      final selected=samples.where((p)=>p.prob(model)>cut).toList();
+      final wins=selected.where((p)=>p.draw).length;
+      final losses=selected.length-wins;
+      final failure=selected.isEmpty?'—':'${(100*losses/selected.length).toStringAsFixed(1)} %';
+      final actual=selected.isEmpty?'—':'${(100*wins/selected.length).toStringAsFixed(1)} %';
+      final expected=selected.isEmpty?'—':'${(100*selected.fold<double>(0,(sum,p)=>sum+p.prob(model))/selected.length).toStringAsFixed(1)} %';
+      return Padding(padding:const EdgeInsets.symmetric(vertical:7),child:Column(
+        crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text('Modelo $model',style:const TextStyle(fontWeight:FontWeight.bold)),
+          Text('Seleccionados: ${selected.length} · Empates: $wins · Fallos: $losses'),
+          Text('Fallos: $failure · Empates reales: $actual · Predicción media: $expected'),
+        ],
+      ));
+    }
+    return Card(child:Padding(padding:const EdgeInsets.all(12),child:Column(
+      crossAxisAlignment:CrossAxisAlignment.start,children:[
+        Text('Falsas alarmas · Probabilidad mayor del ${threshold.toStringAsFixed(0)} %',
+          style:const TextStyle(fontWeight:FontWeight.bold)),
+        const SizedBox(height:8),
+        DropdownButtonFormField<double>(
+          value:threshold,
+          decoration:const InputDecoration(labelText:'Umbral mínimo (estrictamente mayor)'),
+          items:const [25.0,28.0,30.0,31.0,32.0,33.0,35.0,40.0]
+            .map((v)=>DropdownMenuItem<double>(value:v,child:Text('${v.toStringAsFixed(0)} %')))
+            .toList(),
+          onChanged:(v){if(v!=null)setState(()=>threshold=v);},
+        ),
+        rowFor('A'),const Divider(height:8),rowFor('D'),
+        const Divider(height:8),rowFor('C'),
+        const Text('Solo partidos con resultado. Un 32,7 % repetido al principio puede proceder de valores predeterminados del Modelo D. La tasa de fallos no mide por sí sola la calidad de probabilidades.',
+          style:TextStyle(fontSize:12)),
+      ],
+    )));
+  }
  @override Widget build(BuildContext context){
    final rounds=samples.map((e)=>e.round).toSet().toList()..sort();
    final count=math.min(20,samples.length);
@@ -140,6 +178,7 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
            Text('${widget.season} · ${samples.length} partidos'),
            Text('Brier A: ${_brier("A").toStringAsFixed(4)} · D: ${_brier("D").toStringAsFixed(4)} · C: ${_brier("C").toStringAsFixed(4)}'),
            Text('Top $count: A ${_topDraws("A",count)} · D ${_topDraws("D",count)} · C ${_topDraws("C",count)} empates'),
+           _thresholdReport(),
            const Padding(padding:EdgeInsets.symmetric(vertical:10),child:Text(
              'Backtest retrospectivo por jornada. Los aplazamientos pueden alterar la cronología real. Modelo C con parámetros provisionales.')),
            ...rounds.map((r){
