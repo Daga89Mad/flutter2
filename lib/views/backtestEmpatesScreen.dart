@@ -19,8 +19,8 @@ class BacktestEmpatesScreen extends StatefulWidget {
 class _DrawStats {int played=0,draws=0,streak=0,points=0,homeGames=0,awayGames=0,homeGoals=0,awayGoals=0;}
 class _Forecast {
  final int round;final String home,away;
- final double a,d,c;final bool draw;
- const _Forecast(this.round,this.home,this.away,this.a,this.d,this.c,this.draw);
+ final double a,d,c;final bool draw,hasDStats;
+ const _Forecast(this.round,this.home,this.away,this.a,this.d,this.c,this.draw,this.hasDStats);
  double prob(String model)=>model=='D'?d:model=='C'?c:a;
 }
 class _BacktestState extends State<BacktestEmpatesScreen> {
@@ -72,7 +72,7 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
            eitherTeamEightWithoutDraw:h.streak>=8||a.streak>=8);
          final modelC=DrawModelC.predict(
            home:goals[home]??TeamGoalStats(),away:goals[away]??TeamGoalStats());
-         output.add(_Forecast(j,home,away,modelA,modelD,modelC,hg==ag));
+         output.add(_Forecast(j,home,away,modelA,modelD,modelC,hg==ag,ppg!=null&&scoring!=null));
        }
        // Now learn results, only for the NEXT round.
        for(final m in games){
@@ -114,12 +114,14 @@ class _BacktestState extends State<BacktestEmpatesScreen> {
       final losses=selected.length-wins;
       final failure=selected.isEmpty?'—':'${(100*losses/selected.length).toStringAsFixed(1)} %';
       final actual=selected.isEmpty?'—':'${(100*wins/selected.length).toStringAsFixed(1)} %';
+      final noStats=model=='D'?selected.where((p)=>!p.hasDStats).length:0;
       final expected=selected.isEmpty?'—':'${(100*selected.fold<double>(0,(sum,p)=>sum+p.prob(model))/selected.length).toStringAsFixed(1)} %';
       return Padding(padding:const EdgeInsets.symmetric(vertical:7),child:Column(
         crossAxisAlignment:CrossAxisAlignment.start,children:[
           Text('Modelo $model',style:const TextStyle(fontWeight:FontWeight.bold)),
           Text('Seleccionados: ${selected.length} · Empates: $wins · Fallos: $losses'),
           Text('Fallos: $failure · Empates reales: $actual · Predicción media: $expected'),
+          if(model=='D')Text('Sin estadísticas suficientes: $noStats de ${selected.length}',style:const TextStyle(fontSize:12)),
         ],
       ));
     }
