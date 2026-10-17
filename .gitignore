@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Windows bridge local state
+__pycache__/
+*.pyc
+windows_bridge/*.sqlite3*
+windows_bridge/*.log
+windows_bridge/config.local.json
+node_modules/

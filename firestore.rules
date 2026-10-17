@@ -1,0 +1,261 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // APUESTAS
+    match /Apuestas/{groupId}/Personas/{uid}/Realizadas/{betId} {
+      allow read: if signedIn();
+      allow create, delete: if isOwner(uid);
+      allow update: if isOwner(uid)
+        || (signedIn() && request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['Acierto']));
+    }
+
+    // TRASPASOS
+    match /Traspasos/{groupId}/Personas/{uid}/Enviadas/{id} {
+      allow read: if signedIn();
+      allow create: if isOwner(uid)
+        && request.resource.data.Cantidad is number
+        && request.resource.data.Cantidad > 0;
+      allow update, delete: if false;
+    }
+
+    match /Traspasos/{groupId}/Personas/{uid}/Recibidas/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.IdEmisor == request.auth.uid
+        && request.resource.data.Cantidad is number
+        && request.resource.data.Cantidad > 0;
+      allow update, delete: if false;
+    }
+
+    function ligaValida(liga) {
+      return liga in ['LaLiga', 'SerieA'];
+    }
+
+    function rutaPartido(liga, temporada, jornada, partido) {
+      return /databases/$(database)/documents/$(liga)/Resultados/Temporadas/$(temporada)/Jornadas/$(jornada)/Partidos/$(partido);
+    }
+
+    function partidoExiste(liga, temporada, jornada, partido) {
+      return exists(rutaPartido(liga, temporada, jornada, partido));
+    }
+
+    function resultadoDisponible(m) {
+      return m.get('GolesLocal', null) is string
+        && m.get('GolesVisitante', null) is string
+        && m.GolesLocal.matches('^[0-9]+$')
+        && m.GolesVisitante.matches('^[0-9]+$');
+    }
+
+    function partidoPendiente(liga, temporada, jornada, partido) {
+      return partidoExiste(liga, temporada, jornada, partido)
+        && !resultadoDisponible(get(rutaPartido(liga, temporada, jornada, partido)).data);
+    }
+
+    function partidoFinalizado(liga, temporada, jornada, partido) {
+      return partidoExiste(liga, temporada, jornada, partido)
+        && resultadoDisponible(get(rutaPartido(liga, temporada, jornada, partido)).data);
+    }
+
+    function resultadoEsEmpate(liga, temporada, jornada, partido) {
+      let m = get(rutaPartido(liga, temporada, jornada, partido)).data;
+      return resultadoDisponible(m)
+        && int(m.GolesLocal) == int(m.GolesVisitante);
+    }
+
+    function camposBase() {
+      return [
+        'Local', 'Visitante', 'MatchId', 'Liga', 'Temporada', 'Jornada',
+        'Probabilidad', 'ProbabilidadLocal', 'ProbabilidadVisitante',
+        'EmpatesLocal', 'PartidosLocal', 'RachaLocal',
+        'EmpatesVisitante', 'PartidosVisitante', 'RachaVisitante',
+        'Revisado', 'Acertado', 'Modelo', 'GeneradoEn'
+      ];
+    }
+
+    function camposModeloB() {
+      return [
+        'ProbabilidadGoles', 'GolesEsperadosLocal',
+        'GolesEsperadosVisitante', 'FuerzaLocal',
+        'FuerzaVisitante', 'ModeloGoles'
+      ];
+    }
+
+    // CAMPOS NUEVOS: C Y D
+    function camposModelosCD() {
+      return ['ProbabilidadC', 'ModeloC', 'ProbabilidadD', 'ModeloD'];
+    }
+
+    function modelosCDValidos(d) {
+      return !d.keys().hasAny(camposModelosCD())
+        || (
+          d.keys().hasAll(camposModelosCD())
+          && d.ProbabilidadC is number
+          && d.ProbabilidadC > 0
+          && d.ProbabilidadC < 1
+          && d.ModeloC == 'dixon-coles-provisional-v0'
+          && d.ProbabilidadD is number
+          && d.ProbabilidadD > 0
+          && d.ProbabilidadD < 1
+          && d.ModeloD == 'logistica-multivariable-v0'
+        );
+    }
+
+    function modeloBValido(d) {
+      return !d.keys().hasAny(camposModeloB())
+        || (
+          d.keys().hasAll(camposModeloB())
+          && d.ProbabilidadGoles is number
+          && d.ProbabilidadGoles > 0
+          && d.ProbabilidadGoles < 1
+          && d.GolesEsperadosLocal is number
+          && d.GolesEsperadosLocal > 0
+          && d.GolesEsperadosVisitante is number
+          && d.GolesEsperadosVisitante > 0
+          && d.FuerzaLocal is number
+          && d.FuerzaLocal >= -1
+          && d.FuerzaLocal <= 1
+          && d.FuerzaVisitante is number
+          && d.FuerzaVisitante >= -1
+          && d.FuerzaVisitante <= 1
+          && d.ModeloGoles == 'poisson-localia-v1'
+        );
+    }
+
+    function datosPronosticoValidos(liga, temporada, jornada, partido) {
+      let d = request.resource.data;
+      return d.keys().hasAll(camposBase())
+        && d.keys().hasOnly(camposBase().concat(camposModeloB()).concat(camposModelosCD()))
+        && ligaValida(liga)
+        && d.Liga == liga
+        && d.Temporada == temporada
+        && d.Jornada == int(jornada)
+        && d.MatchId == partido
+        && d.Local is string
+        && d.Visitante is string
+        && d.Probabilidad is number
+        && d.Probabilidad > 0
+        && d.Probabilidad < 1
+        && d.ProbabilidadLocal is number
+        && d.ProbabilidadLocal > 0
+        && d.ProbabilidadLocal < 1
+        && d.ProbabilidadVisitante is number
+        && d.ProbabilidadVisitante > 0
+        && d.ProbabilidadVisitante < 1
+        && d.EmpatesLocal is int
+        && d.EmpatesLocal >= 0
+        && d.PartidosLocal is int
+        && d.PartidosLocal >= 0
+        && d.RachaLocal is int
+        && d.RachaLocal >= 0
+        && d.EmpatesVisitante is int
+        && d.EmpatesVisitante >= 0
+        && d.PartidosVisitante is int
+        && d.PartidosVisitante >= 0
+        && d.RachaVisitante is int
+        && d.RachaVisitante >= 0
+        && d.Revisado == false
+        && d.Acertado == null
+        && d.Modelo == 'beta-logit-v1'
+        && d.GeneradoEn == request.time
+        && modeloBValido(d)
+        && modelosCDValidos(d);
+    }
+
+    match /PronosticosEmpates/{liga}/Temporadas/{temporada}/Jornadas/{jornada}/Partidos/{partido} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && datosPronosticoValidos(liga, temporada, jornada, partido)
+        && partidoPendiente(liga, temporada, jornada, partido);
+      allow update: if signedIn()
+        && ligaValida(liga)
+        && resource.data.Revisado == false
+        && partidoFinalizado(liga, temporada, jornada, partido)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['Revisado', 'Acertado', 'RevisadoEn'])
+        && request.resource.data.Revisado == true
+        && request.resource.data.Acertado is bool
+        && request.resource.data.Acertado ==
+          resultadoEsEmpate(liga, temporada, jornada, partido)
+        && request.resource.data.RevisadoEn == request.time;
+      allow delete: if false;
+    }
+
+    // FUERZA MANUAL DE EQUIPOS: se conserva el bloque que ya te funciona.
+    match /ConfiguracionEmpates/{liga}/Equipos/{equipo} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && ligaValida(liga)
+        && request.resource.data.keys().hasOnly(['Fuerza', 'ActualizadoEn'])
+        && request.resource.data.keys().hasAll(['Fuerza', 'ActualizadoEn'])
+        && request.resource.data.Fuerza is number
+        && (
+          request.resource.data.Fuerza == -1
+          || request.resource.data.Fuerza == 0
+          || request.resource.data.Fuerza == 1
+        )
+        && request.resource.data.ActualizadoEn is timestamp;
+      allow delete: if false;
+    }
+
+    // Puente móvil-PC. Solo ensayos; cada usuario accede únicamente a su canal.
+    function validRoundCommand(d) {
+      return d.keys().hasOnly(['schema', 'mode', 'requestId', 'action', 'scope', 'authorization', 'initialBets', 'updatedAt'])
+        && d.keys().hasAll(['schema', 'mode', 'requestId', 'action', 'scope', 'authorization', 'initialBets', 'updatedAt'])
+        && d.schema == 1 && d.mode == 'simulation'
+        && d.requestId is string && d.requestId.matches('[a-f0-9]{32}')
+        && d.action in ['authorize', 'revoke']
+        && d.scope is string && d.scope.matches('LaLiga/[0-9]{4}-[0-9]{4}/([1-9]|[12][0-9]|3[0-8])')
+        && d.authorization is map
+        && d.authorization.keys().hasOnly(['mode', 'scope', 'schedule', 'selectedIds', 'budgetCents', 'rehearsalOdds', 'approvedAt', 'expiresAt'])
+        && d.authorization.mode == 'round-simulation-v1'
+        && d.authorization.scope == d.scope
+        && d.authorization.schedule is string && d.authorization.schedule.size() < 20000
+        && d.authorization.selectedIds is list && d.authorization.selectedIds.size() > 0 && d.authorization.selectedIds.size() <= 10
+        && d.authorization.budgetCents is int && d.authorization.budgetCents >= 100 && d.authorization.budgetCents <= 51100
+        && d.authorization.rehearsalOdds is number && d.authorization.rehearsalOdds >= 2.8
+        && d.authorization.approvedAt is string && d.authorization.expiresAt is string
+        && d.initialBets is list && d.initialBets.size() <= 9
+        && d.updatedAt == request.time;
+    }
+    match /PuenteJornada/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && validRoundCommand(request.resource.data)
+        && request.resource.data.action == 'authorize';
+      allow update: if isOwner(uid) && validRoundCommand(request.resource.data)
+        && (request.resource.data.requestId != resource.data.requestId
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action', 'updatedAt']));
+      allow delete: if false;
+      match /Estado/actual {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.keys().hasOnly(['mode', 'agentId', 'lastSeenAt', 'leaseUntil', 'requestId', 'scope', 'status', 'message', 'bets', 'results', 'spentCents'])
+          && request.resource.data.mode == 'simulation'
+          && request.resource.data.agentId is string && request.resource.data.agentId.size() <= 100
+          && request.resource.data.lastSeenAt is timestamp
+          && request.resource.data.leaseUntil is timestamp
+          && (!('bets' in request.resource.data) || (request.resource.data.bets is list && request.resource.data.bets.size() <= 9));
+        allow delete: if false;
+      }
+    }
+
+    // RESTO: mismo comportamiento de tu aplicación actual.
+    match /{collection}/{rest=**} {
+      allow read: if signedIn() && collection != 'PuenteJornada';
+      allow write: if signedIn()
+        && !(collection in [
+          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada'
+        ]);
+    }
+  }
+}

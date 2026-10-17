@@ -8,10 +8,12 @@ class RoundRehearsal {
   final List<RehearsalBet> bets;
   final Map<String, DateTime> kickoffs;
   final RoundAuthorization? authorization;
+  final String? pcRequestId;
   RoundRehearsal({
     required this.bets,
     required this.kickoffs,
     this.authorization,
+    this.pcRequestId,
   });
 }
 
@@ -27,6 +29,7 @@ class RoundBettingStore {
     if (raw == null) return RoundRehearsal(bets: [], kickoffs: {});
     final data = jsonDecode(raw) as Map<String, dynamic>;
     return RoundRehearsal(
+      pcRequestId: data['pcRequestId'] as String?,
       bets: (data['bets'] as List)
           .map(
             (b) => RehearsalBet.fromJson(Map<String, dynamic>.from(b as Map)),
@@ -49,6 +52,7 @@ class RoundBettingStore {
       jsonEncode({
         'bets': rehearsal.bets.map((b) => b.toJson()).toList(),
         'authorization': rehearsal.authorization?.toJson(),
+        'pcRequestId': rehearsal.pcRequestId,
         'kickoffs': rehearsal.kickoffs.map(
           (id, time) => MapEntry(id, time.toUtc().toIso8601String()),
         ),

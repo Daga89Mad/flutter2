@@ -8,6 +8,7 @@ import 'package:plantillalogin/core/firebaseCrudService.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
 import 'package:plantillalogin/core/roundBettingStore.dart';
 import 'package:plantillalogin/core/roundAuthorization.dart';
+import 'package:plantillalogin/core/roundPcBridge.dart';
 
 class ApuestaJornadaScreen extends StatefulWidget {
   const ApuestaJornadaScreen({super.key});
@@ -19,6 +20,14 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   late String _season;
   late final List<String> _seasons;
   int _round = 1;
+  bool _pcMode = true;
+  RoundPcBridge? _bridge;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _pcSubscription;
+  DateTime? _pcSeen;
+  String? _pcRemoteId;
+  String? _pcRemoteScope;
+  Map<String, dynamic> _pcResults = {};
+  bool _pcSyncing = false;
   bool _loading = true;
   bool _saving = false;
   bool _dialogOpen = false;
@@ -55,6 +64,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   void dispose() {
     _subscription?.cancel();
     _clock?.cancel();
+    _pcSubscription?.cancel();
     _odds.dispose();
     _budget.dispose();
     super.dispose();
@@ -141,6 +151,9 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       _odds.clear();
     });
     await _subscription?.cancel();
+    await _pcSubscription?.cancel();
+    _pcResults = {};
+    _pcSeen = null;
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null)
@@ -153,10 +166,45 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       _store = store;
       _uid = uid;
       _rehearsal = rehearsal;
-      if (rehearsal.authorization != null) {
-        _budget.text = (rehearsal.authorization!.budgetCents / 100)
+      _bridge = RoundPcBridge(uid);
+      _pcMode =
+          rehearsal.pcRequestId != null || rehearsal.authorization == null;
+      // Recupera el OK remoto aunque se haya cerrado o reinstalado la app.
+      try {
+        final remote = await _bridge!.current();
+        if (!mounted || generation != _generation) return;
+        _pcRemoteId = remote?['action'] == 'authorize'
+            ? (remote?['requestId'] as String?)
+            : null;
+        _pcRemoteScope = remote?['scope'] as String?;
+        if (remote?['scope'] == _scope && remote?['mode'] == 'simulation') {
+          final rawAuth = Map<String, dynamic>.from(
+            remote!['authorization'] as Map,
+          );
+          final recovered = RoundAuthorization.fromJson(rawAuth);
+          _rehearsal = RoundRehearsal(
+            bets: rehearsal.bets,
+            kickoffs: rehearsal.kickoffs,
+            authorization: remote['action'] == 'authorize' ? recovered : null,
+            pcRequestId: remote['requestId'] as String,
+          );
+          _pcMode = true;
+          await store.save(_rehearsal);
+        }
+      } catch (e) {
+        _status = 'No se pudo comprobar el PC: $e';
+      }
+      _pcSubscription = _bridge!.states.listen(
+        (snap) => unawaited(_receivePc(snap.data(), generation)),
+        onError: (Object e) {
+          if (mounted && generation == _generation)
+            setState(() => _status = 'Sin conexión con el PC: $e');
+        },
+      );
+      if (_rehearsal.authorization != null) {
+        _budget.text = (_rehearsal.authorization!.budgetCents / 100)
             .toStringAsFixed(2);
-        _odds.text = rehearsal.authorization!.rehearsalOdds.toStringAsFixed(2);
+        _odds.text = _rehearsal.authorization!.rehearsalOdds.toStringAsFixed(2);
       }
       _subscription = _matches.snapshots().listen(
         (snap) {
@@ -183,6 +231,77 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  Future<void> _receivePc(Map<String, dynamic>? state, int generation) async {
+    if (!mounted ||
+        generation != _generation ||
+        state == null ||
+        _pcSyncing ||
+        state['mode'] != 'simulation' ||
+        state['scope'] != _scope ||
+        state['requestId'] != _rehearsal.pcRequestId)
+      return;
+    _pcSyncing = true;
+    try {
+      final bets = (state['bets'] as List)
+          .map(
+            (b) => RehearsalBet.fromJson(Map<String, dynamic>.from(b as Map)),
+          )
+          .toList();
+      if (bets.length > 9 ||
+          bets.asMap().entries.any(
+            (e) => e.value.cents != 100 * (1 << e.key),
+          ) ||
+          bets.map((b) => b.matchId).toSet().length != bets.length) {
+        throw StateError('Historial del PC incoherente.');
+      }
+      final terminal = ['stopped', 'revoked'].contains(state['status']);
+      final next = RoundRehearsal(
+        bets: bets,
+        kickoffs: _rehearsal.kickoffs,
+        authorization: terminal ? null : _rehearsal.authorization,
+        pcRequestId: _rehearsal.pcRequestId,
+      );
+      await _store!.save(next);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _rehearsal = next;
+        final seen = state['lastSeenAt'];
+        _pcSeen = seen is Timestamp
+            ? seen.toDate()
+            : DateTime.tryParse('$seen');
+        _pcResults = Map<String, dynamic>.from(state['results'] as Map? ?? {});
+        _status = 'PC: ${state['message']}';
+      });
+    } catch (e) {
+      if (mounted && generation == _generation)
+        setState(() => _status = 'No se pudo leer el estado del PC: $e');
+    } finally {
+      _pcSyncing = false;
+    }
+  }
+
+  Future<void> _stopRemote() async {
+    if (_bridge == null || _pcRemoteId == null || _saving) return;
+    setState(() => _saving = true);
+    try {
+      final id = _pcRemoteId!;
+      if (_rehearsal.pcRequestId == id) {
+        await _revoke('Revocación enviada. Espera la confirmación del PC.');
+        return;
+      }
+      await _bridge!.revoke(id);
+      if (mounted)
+        setState(() {
+          _pcRemoteId = null;
+          _status = 'Revocación enviada. Espera la confirmación del PC.';
+        });
+    } catch (e) {
+      if (mounted) _notify('$e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -250,6 +369,12 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   Future<void> _approveRound() async {
     if (_saving || _dialogOpen || _loading || _error != null || _store == null)
       return;
+    if (!_pcMode && _pcRemoteId != null) {
+      _notify(
+        'Revoca la autorización del PC antes de iniciar un ensayo local.',
+      );
+      return;
+    }
     final groups = RoundAuthorization.groups(
       _effectiveFixtures,
       DateTime.now(),
@@ -286,6 +411,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       return;
     }
     final generation = _generation;
+    final usePc = _pcMode;
     final expires = DateTime.now().add(const Duration(seconds: 60));
     setState(() => _dialogOpen = true);
     final confirmed = await showDialog<bool>(
@@ -296,15 +422,16 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
         scrollable: true,
         content: Text(
           'LaLiga · $_season · jornada $_round\n'
-          'Inicio: 1 €. Duplicar tras derrota final. Máximo por apuesta: 256 €.\n'
-          'Presupuesto total de la jornada: ${_money(draft.budgetCents)}.\n'
-          'Cuota mínima: 2,80. Cuota ficticia del ensayo: ${odds.toStringAsFixed(2)}.\n\n'
-          '${_effectiveFixtures.where((m) => draft.selectedIds.contains(m.id)).map((m) => '${m.label} · ${_date(m.kickoff)}').join('\n')}\n\n'
-          'Este OK permite simular las apuestas elegidas sin más confirmaciones '
-          'durante esta jornada. Se detiene al confirmar cualquier empate, '
-          'alcanzar el presupuesto o el límite. La próxima jornada necesita otro OK.\n\n'
-          'No se enviará dinero real. El ensayo solo avanza con esta pantalla abierta '
-          'y resultados actualizados en Firestore. Puedes detenerlo en cualquier momento.',
+                  'Inicio: 1 €. Duplicar tras derrota final. Máximo por apuesta: 256 €.\n'
+                  'Presupuesto total de la jornada: ${_money(draft.budgetCents)}.\n'
+                  'Cuota mínima: 2,80. Cuota ficticia del ensayo: ${odds.toStringAsFixed(2)}.\n\n'
+                  '${_effectiveFixtures.where((m) => draft.selectedIds.contains(m.id)).map((m) => '${m.label} · ${_date(m.kickoff)}').join('\n')}\n\n'
+                  'Este OK permite simular las apuestas elegidas sin más confirmaciones '
+                  'durante esta jornada. Se detiene al confirmar cualquier empate, '
+                  'alcanzar el presupuesto o el límite. La próxima jornada necesita otro OK.\n\n' +
+              (usePc
+                  ? 'No se enviará dinero real. El PC ejecutará el ensayo con el móvil cerrado. Debe estar conectado, encendido y sin suspensión.'
+                  : 'No se enviará dinero real. Mantén esta pantalla abierta y los resultados actualizados en Firestore.'),
         ),
         actions: [
           TextButton(
@@ -345,16 +472,34 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
         rehearsalOdds: draft.rehearsalOdds,
         now: DateTime.now(),
       );
+      if (usePc && _rehearsal.kickoffs.isNotEmpty) {
+        throw StateError(
+          'El PC verifica los horarios con el proveedor. Usa una jornada sin ajustes manuales.',
+        );
+      }
+      final requestId = usePc
+          ? await _bridge!.publish(authorization, _rehearsal.bets)
+          : null;
       final next = RoundRehearsal(
         bets: _rehearsal.bets,
         kickoffs: _rehearsal.kickoffs,
         authorization: authorization,
+        pcRequestId: requestId,
       );
+      // Impide que el móvil avance si la publicación remota ya se completó.
+      _rehearsal = next;
+      if (requestId != null) {
+        _pcRemoteId = requestId;
+        _pcRemoteScope = _scope;
+        _pcSeen = null;
+      }
       await _store!.save(next);
       if (mounted)
         setState(() {
           _rehearsal = next;
-          _status = 'Jornada autorizada para simulación.';
+          _status = usePc
+              ? 'OK enviado. Esperando confirmación del PC.'
+              : 'Jornada autorizada para simulación local.';
         });
     } catch (e) {
       if (mounted) _notify('$e');
@@ -368,15 +513,23 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
   Future<void> _revoke(String message) async {
+    final requestId = _rehearsal.pcRequestId;
+    if (requestId != null) {
+      await _bridge!.revoke(requestId);
+      _pcRemoteId = null;
+    }
     final next = RoundRehearsal(
       bets: _rehearsal.bets,
       kickoffs: _rehearsal.kickoffs,
+      pcRequestId: requestId,
     );
     await _store!.save(next);
     if (mounted)
       setState(() {
         _rehearsal = next;
-        _status = message;
+        _status = requestId == null
+            ? message
+            : 'Revocación enviada. Esperando confirmación del PC.';
       });
   }
 
@@ -397,6 +550,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   Future<void> _advance() async {
     final authorization = _rehearsal.authorization;
     if (!mounted ||
+        _rehearsal.pcRequestId != null ||
         _loading ||
         _saving ||
         _dialogOpen ||
@@ -502,8 +656,8 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
               child: Text(
                 'SIMULACIÓN · Un OK por jornada\n'
                 'Después del OK se simula la secuencia elegida sin más confirmaciones. '
-                'No se envía dinero real. Mantén esta pantalla abierta y los resultados actualizados. '
-                'La ejecución con la app cerrada requiere un servicio externo todavía sin conectar.',
+                'No se envía dinero real. En modo PC puedes cerrar el móvil después de recibir su confirmación. '
+                'Windows debe permanecer conectado y sin suspensión. BF Bot Manager todavía no recibe órdenes.',
               ),
             ),
           ),
@@ -551,6 +705,19 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
               ),
             ],
           ),
+          if (_pcRemoteId != null) ...[
+            Text('Autorización enviada al PC: ${_pcRemoteScope ?? ""}'),
+            OutlinedButton(
+              onPressed: busy ? null : _stopRemote,
+              child: const Text('Revocar autorización del PC'),
+            ),
+          ],
+          if (_rehearsal.pcRequestId != null)
+            Text(
+              _pcSeen == null
+                  ? 'PC sin confirmar la recepción de este OK.'
+                  : 'Última señal del PC: ${_date(_pcSeen)}${DateTime.now().difference(_pcSeen!).inSeconds > 75 ? " · Sin señal reciente: comprueba Windows." : ""}',
+            ),
           const SizedBox(height: 16),
           const Text(
             '1 € → 2 € → 4 €… máximo 256 €. Cuota mínima 2,80.\n'
@@ -592,6 +759,16 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
                 label: const Text('Detener jornada y revocar OK'),
               ),
             ] else ...[
+              SwitchListTile(
+                title: const Text('Ejecutar ensayo en mi PC Windows'),
+                subtitle: const Text(
+                  'Conecta el programa con la cuenta de la app. Los horarios se verifican con TheSportsDB.',
+                ),
+                value: _pcMode,
+                onChanged: locked
+                    ? null
+                    : (value) => setState(() => _pcMode = value),
+              ),
               Text(
                 'Elige un partido por grupo antes de autorizar',
                 style: Theme.of(context).textTheme.titleMedium,
@@ -699,7 +876,17 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
               const Text('Todavía no se ha simulado ninguna apuesta.'),
             ..._rehearsal.bets.map((b) {
               final m = byId[b.matchId];
-              final result = m == null || !m.hasResult
+              final remote = _pcResults[b.matchId];
+              final pcFinal = remote is Map && remote['finished'] == true;
+              final pcDraw =
+                  pcFinal && remote['homeGoals'] == remote['awayGoals'];
+              final result = _rehearsal.pcRequestId != null
+                  ? (pcFinal
+                        ? (pcDraw
+                              ? 'Acertada (simulación PC)'
+                              : 'Fallada (simulación PC)')
+                        : 'Pendiente de resultado confirmado por el PC')
+                  : m == null || !m.hasResult
                   ? 'Pendiente de resultado final'
                   : m.draw
                   ? 'Acertada (simulación)'

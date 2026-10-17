@@ -5,8 +5,9 @@
 El menú abre `ApuestaJornadaScreen`, que lee LaLiga del Firestore existente,
 incluyendo la ruta legacy de 2025-2026. Esta versión **solo simula**: no envía
 órdenes a una casa, no consulta cuotas/saldo reales y no tiene credenciales.
-El historial y el consentimiento se guardan localmente por usuario, temporada
-y jornada. No se sincronizan entre dispositivos y no son contabilidad real.
+El historial local se conserva por usuario, temporada y jornada. En modo PC,
+el OK y el estado del ensayo también se sincronizan en un canal privado de
+Firestore. No son contabilidad real. Instalación: [Windows](../windows_bridge/README.md).
 
 El usuario ha elegido **un OK por jornada**, sustituyendo el OK por apuesta.
 Ese consentimiento no se hereda a la jornada siguiente ni autoriza apuestas
@@ -43,19 +44,36 @@ fuera de los partidos, importe máximo y presupuesto mostrados.
    la autorización. Para volver a autorizar debe revisarse todo de nuevo.
 9. La siguiente jornada comienza en 1 € sin arrastrar pérdidas ni autorización.
 
-No hay trabajador en segundo plano: cerrar o cambiar la pantalla interrumpe el
-ensayo. Al abrirla de nuevo se revalida la autorización guardada, sin simular
-retroactivamente encuentros ya iniciados. Una apuesta simulada pendiente se
-conserva y bloquea la siguiente hasta disponer de resultado final.
-Mientras haya una autorización guardada, debe revocarse antes de cambiar jornada.
+Hay dos formas de ejecutar el ensayo. En modo local hay que mantener la pantalla
+abierta y actualizar los resultados. En modo PC, el programa Python de
+`windows_bridge` recibe el OK desde Firestore, consulta los resultados y guarda
+su progreso en SQLite incluso con el móvil cerrado. Windows debe estar despierto
+y conectado. No se apuesta retroactivamente sobre partidos ya iniciados.
+
+El canal es `PuenteJornada/{uid}` y su respuesta `Estado/actual`. Se usa Firebase
+Auth con la cuenta de la app y REST; no hay Admin SDK ni claves privadas. Una
+lectura con versión y una escritura condicionada mantienen un lease entre PCs.
+La clave de cada ensayo y su secuencia tienen restricciones UNIQUE en SQLite.
+El PC relee el comando antes de registrar una nueva apuesta ficticia y publica
+su última señal, estado, resultados e historial. Un fallo de red no autoriza
+una apuesta real ni activa un ejecutor alternativo.
+
+La revocación se guarda en el servidor y el PC confirma cuando la recibe. El
+estado del móvil no acredita recepción hasta observar esa respuesta. No existe
+atomicidad entre el último GET y la escritura SQLite: puede registrarse un ensayo
+si la revocación coincide con esos instantes. Este canal no debe reutilizarse para
+dinero real sin un protocolo de reserva y reconciliación con el ejecutor.
 
 ## Datos y resultados
 
 El importador existente guarda `InicioUTC` (Timestamp), `Estado` y `Finalizado`.
 Solo se interpreta un marcador cuando hay estado final explícito y ambos goles.
 Un 0-0 en directo, `Empate: true` o el mero paso de 120 minutos no bastan.
-Los resultados solo cambian si se reimportan o un proceso actualiza Firestore:
-la suscripción no consulta por sí misma al proveedor deportivo.
+En modo local los resultados solo cambian al actualizar Firestore. En modo PC,
+TheSportsDB se consulta directamente con una caché máxima de un minuto; el estado
+se devuelve al móvil sin modificar los documentos globales de resultados. Los
+equipos deben coincidir exactamente y los diez encuentros deben estar disponibles.
+Sin datos actuales se bloquean nuevos ensayos; no se usa una respuesta caducada.
 
 Las reglas compartidas de `firestore.rules`, versión 2, permiten estos campos en
 las rutas de resultados mediante su bloque general para usuarios autenticados.
@@ -65,56 +83,34 @@ Los horarios de ensayo opcionales se guardan localmente; no alteran el original.
 
 ## Ejecución real sin supervisión: pendiente
 
-No se ha contratado ni integrado una API o software externo. El usuario ha
-rechazado el coste de la API Live personal de Betfair. La siguiente fase debe
-validar un ejecutor autorizado compatible con España (por ejemplo una aplicación
-con licencia del operador), su coste y si expone las operaciones necesarias.
-No asumir que cualquier programa de terceros permite integrarse con Flutter.
+El enlace móvil-PC funciona únicamente en simulación. La cuenta Betfair del
+usuario todavía no está vinculada a este programa. BF Bot Manager es el ejecutor
+previsto, pendiente de instalar/configurar y verificar su contrato de importación
+y su retorno de ejecuciones y liquidaciones. No se generan órdenes reales ni un
+CSV con un esquema supuesto. La activación de una API Live personal no es
+requisito de esta fase.
 
-Para actuar con el teléfono cerrado hace falta un servidor/trabajador permanente
-con acceso autorizado al ejecutor, resultados y cuotas actuales. Flutter solo
-configurará, autorizará, revocará y mostrará el estado. Las credenciales se
-provisionarán en el gestor de secretos del servidor, nunca en Flutter o GitHub.
-
-## Contrato de servidor previsto (no implementado)
-
-- `POST /round-betting/rounds/{season}/{round}/prepare`: validar usuario Firebase,
-  liga, calendario completo, mercado de empate y selecciones previas. Devolver
-  borrador/version con todos los partidos elegidos, importe inicial, progresión,
-  cuota mínima, presupuesto y caducidad de revisión; no apostar.
-- `POST /round-betting/rounds/{season}/{round}/authorize`: consumir un borrador
-  una sola vez después del OK, ligado a usuario, liga, temporada y jornada.
-  Mantener un estado persistente de autorización y reserva de exposición.
-- Un trabajador podrá enviar las apuestas cubiertas por esa autorización, sin
-  otro OK, después de revalidar estado, saldo, mercado, cuota mínima y límites.
-  No podrá elegir otro simultáneo, exceder el presupuesto ni autorizar otra jornada.
-- Si cambia el calendario, parar y exigir una nueva revisión/OK. Nunca aceptar
-  silenciosamente una cuota inferior a la mínima ni aumentar los límites.
-- `POST /round-betting/rounds/{season}/{round}/revoke`: bloquear nuevas reservas
-  atómicamente. No implica anular órdenes ya ejecutadas. Reconciliar las partes
-  pendientes y cualquier exposición existente con el ejecutor.
-- Usar bloqueo persistente e identificador único por apuesta y comprobar estados
-  desconocidos antes de reintentar. Un timeout no acredita que la orden falló.
-- La progresión dependerá de importes realmente ejecutados y liquidaciones,
-  contemplando órdenes parciales, anulaciones y resultados corregidos.
-- No confiar en SharedPreferences, relojes móviles ni resultados modificables
-  por clientes para autorizar dinero. Esta fase necesita seguridad de servidor,
-  pruebas del ejecutor y una validación independiente de los resultados deportivos.
+Antes de habilitar dinero real se necesitan identificadores exactos de mercado y
+selección, cuotas y saldo actuales, importes ejecutados, estados parciales,
+rechazos, liquidaciones y reconciliación tras desconexiones. El presupuesto y la
+revocación deben coordinarse con el ejecutor. Las reglas actuales permiten al dueño
+escribir su propio canal de ensayo: no sustituyen un backend de órdenes reales.
 
 ## Validación
 
-Los 23 casos de lógica se ejecutaron con el SDK Dart independiente y pasaron.
-El análisis estático del motor, autorización y parser no encontró incidencias.
-Se comprobaron formato, imports locales y `git diff --check`.
+- 23 pruebas del motor/autorización Dart superadas con el SDK independiente y
+  el paquete `test`; análisis estático de esos módulos sin incidencias.
+- Pruebas Python de progresión, fallos de red, reinicios, traslado entre PCs,
+  revocación, proveedor y límites. Ejecución: ver README de Windows.
+- 18 comprobaciones de reglas superadas contra un emulador local Firestore:
+  dueño, aislamiento entre cuentas, anónimos, revocación, modo e inmutabilidad.
+- Formato Dart y `git diff --check` comprobados.
 
-Pruebas Dart de progresión, reinicio, empates, directo, horarios, persistencia,
-límites y autorización de una sola jornada; comprobar también elección previa,
-caducidad, cambios de calendario y presupuesto acumulado.
+Faltan la compilación completa de Flutter, prueba visual en dispositivo y prueba
+real del enlace con Windows/Firebase. No se ha instalado software en el PC del
+usuario, publicado reglas en producción ni conectado ninguna cuenta Betfair.
+La inicialización anterior de Flutter fue bloqueada por revisión automática al
+intentar acceder a metadatos de instancia. Se han usado pruebas del SDK Dart
+independiente sin volver a invocar esa inicialización.
 
-Flutter completo y prueba visual en dispositivo siguen pendientes: su anterior
-inicialización fue bloqueada por revisión automática al intentar acceder a
-metadatos de instancia. Para esta fase se usa solo el SDK Dart independiente,
-sin invocar la inicialización de Flutter.
-
-Comando pendiente en un entorno Flutter configurado:
-`flutter test test/round_betting_test.dart`.
+En un entorno Flutter ya configurado: `flutter test test/round_betting_test.dart`.
