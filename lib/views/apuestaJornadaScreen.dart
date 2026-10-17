@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:plantillalogin/core/jornadaAccess.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -10,13 +12,28 @@ import 'package:plantillalogin/core/roundBettingStore.dart';
 import 'package:plantillalogin/core/roundAuthorization.dart';
 import 'package:plantillalogin/core/roundPcBridge.dart';
 
-class ApuestaJornadaScreen extends StatefulWidget {
+class ApuestaJornadaScreen extends StatelessWidget {
   const ApuestaJornadaScreen({super.key});
   @override
-  State<ApuestaJornadaScreen> createState() => _ApuestaJornadaState();
+  Widget build(BuildContext context) => JornadaAccessGate(
+    builder: (context, allowed) => allowed
+        ? const _ApuestaJornadaContent()
+        : Scaffold(
+            appBar: AppBar(title: const Text('Apuesta a jornada')),
+            body: const Center(
+              child: Text('Acceso restringido a usuarios autorizados.'),
+            ),
+          ),
+  );
 }
 
-class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
+class _ApuestaJornadaContent extends StatefulWidget {
+  const _ApuestaJornadaContent();
+  @override
+  State<_ApuestaJornadaContent> createState() => _ApuestaJornadaState();
+}
+
+class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
   late String _season;
   late final List<String> _seasons;
   int _round = 1;

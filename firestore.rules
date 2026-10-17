@@ -208,6 +208,34 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Lista de acceso: se administra desde la consola, nunca desde el cliente.
+    function jornadaAutorizada() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/AccesoApuestaJornada/$(request.auth.uid))
+        && get(/databases/$(database)/documents/AccesoApuestaJornada/$(request.auth.uid)).data.activo == true;
+    }
+    function puedeInicializarJornada() {
+      return signedIn() && request.auth.uid == 'DBbLkTOEvqMTUP4zMAn7ap8iLFZ2'
+        && !exists(/databases/$(database)/documents/AccesoApuestaJornada/_inicializacion);
+    }
+    match /AccesoApuestaJornada/{uid} {
+      allow get: if isOwner(uid)
+        || (uid == '_inicializacion' && signedIn()
+          && request.auth.uid == 'DBbLkTOEvqMTUP4zMAn7ap8iLFZ2');
+      allow list, update, delete: if false;
+      // Alta inicial única, ligada al UID solicitado y a una escritura atómica.
+      allow create: if puedeInicializarJornada() && (
+        (uid == 'DBbLkTOEvqMTUP4zMAn7ap8iLFZ2'
+          && request.resource.data.keys().hasOnly(['activo'])
+          && request.resource.data.activo == true
+          && existsAfter(/databases/$(database)/documents/AccesoApuestaJornada/_inicializacion))
+        || (uid == '_inicializacion'
+          && request.resource.data.keys().hasOnly(['uidInicial'])
+          && request.resource.data.uidInicial == request.auth.uid
+          && existsAfter(/databases/$(database)/documents/AccesoApuestaJornada/$(request.auth.uid)))
+      );
+    }
+
     // Puente móvil-PC. Solo ensayos; cada usuario accede únicamente a su canal.
     function validRoundCommand(d) {
       return d.keys().hasOnly(['schema', 'mode', 'requestId', 'action', 'scope', 'authorization', 'initialBets', 'updatedAt'])
@@ -229,16 +257,17 @@ service cloud.firestore {
         && d.updatedAt == request.time;
     }
     match /PuenteJornada/{uid} {
-      allow read: if isOwner(uid);
-      allow create: if isOwner(uid) && validRoundCommand(request.resource.data)
+      allow read: if isOwner(uid) && jornadaAutorizada();
+      allow create: if isOwner(uid) && jornadaAutorizada() && validRoundCommand(request.resource.data)
         && request.resource.data.action == 'authorize';
       allow update: if isOwner(uid) && validRoundCommand(request.resource.data)
+        && (jornadaAutorizada() || request.resource.data.action == 'revoke')
         && (request.resource.data.requestId != resource.data.requestId
           || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action', 'updatedAt']));
       allow delete: if false;
       match /Estado/actual {
-        allow read: if isOwner(uid);
-        allow create, update: if isOwner(uid)
+        allow read: if isOwner(uid) && jornadaAutorizada();
+        allow create, update: if isOwner(uid) && jornadaAutorizada()
           && request.resource.data.keys().hasOnly(['mode', 'agentId', 'lastSeenAt', 'leaseUntil', 'requestId', 'scope', 'status', 'message', 'bets', 'results', 'spentCents'])
           && request.resource.data.mode == 'simulation'
           && request.resource.data.agentId is string && request.resource.data.agentId.size() <= 100
@@ -251,10 +280,10 @@ service cloud.firestore {
 
     // RESTO: mismo comportamiento de tu aplicación actual.
     match /{collection}/{rest=**} {
-      allow read: if signedIn() && collection != 'PuenteJornada';
+      allow read: if signedIn() && !(collection in ['PuenteJornada', 'AccesoApuestaJornada']);
       allow write: if signedIn()
         && !(collection in [
-          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada'
+          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada', 'AccesoApuestaJornada'
         ]);
     }
   }

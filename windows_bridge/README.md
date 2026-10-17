@@ -24,6 +24,11 @@ Betfair permite preparar la siguiente integración, pero no la activa por sí so
    También se pueden publicar desde la consola de Firestore. Estas reglas y la app
    modificada deben estar instaladas antes de probar el enlace. No se han desplegado
    cambios en tu Firebase desde este desarrollo.
+   La app actualizada también exige `AccesoApuestaJornada/{uid}` con `activo: true`.
+   Al abrirla por primera vez con `DBbLkTOEvqMTUP4zMAn7ap8iLFZ2`, crea ese primer
+   permiso una única vez después de publicar las reglas. Los demás se añaden
+   desde la consola Firebase. No borres la marca `_inicializacion` al retirar
+   permisos. Sin acceso autorizado, el botón se oculta y el PC no puede continuar.
 4. Abre `windows_bridge/iniciar.cmd`. Inicia sesión con **el mismo correo y
    contraseña de la app móvil**, no con los de Betfair. No compartas contraseñas
    por el chat. La configuración pública de Firebase ya está incluida.

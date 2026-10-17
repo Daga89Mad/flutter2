@@ -1,6 +1,7 @@
 // lib/views/menu_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:plantillalogin/core/jornadaAccess.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:plantillalogin/views/calculatorScreen.dart';
@@ -27,7 +28,11 @@ class MenuScreen extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => JornadaAccessGate(
+    builder: (context, allowed) => _buildMenu(context, allowed),
+  );
+
+  Widget _buildMenu(BuildContext context, bool allowed) {
     return Scaffold(
       appBar: AppBar(title: const Text('Menú Principal')),
       body: Padding(
@@ -52,9 +57,7 @@ class MenuScreen extends StatelessWidget {
               label: 'Calculadora',
               onTap: () {
                 Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const CalculatorScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const CalculatorScreen()),
                 );
               },
             ),
@@ -105,15 +108,18 @@ class MenuScreen extends StatelessWidget {
                 );
               },
             ),
-            _MenuButton(
-              icon: Icons.event_available,
-              label: 'Apuesta a jornada',
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ApuestaJornadaScreen()),
-                );
-              },
-            ),
+            if (allowed)
+              _MenuButton(
+                icon: Icons.event_available,
+                label: 'Apuesta a jornada',
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const ApuestaJornadaScreen(),
+                    ),
+                  );
+                },
+              ),
             _MenuButton(
               icon: Icons.settings,
               label: 'Ajustes',

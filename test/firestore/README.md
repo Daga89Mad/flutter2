@@ -11,4 +11,5 @@ npm test
 El script carga las reglas de la raíz y borra solo los documentos del emulador.
 No se conecta a producción. Comprueba acceso del dueño, rechazo de otros
 usuarios/anónimos, revocación, inmutabilidad de un OK, modo solo de simulación
+alta inicial única, retirada de permisos sin autoalta posterior
 y conservación del acceso previo a los resultados de LaLiga.

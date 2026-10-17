@@ -13,6 +13,28 @@ El usuario ha elegido **un OK por jornada**, sustituyendo el OK por apuesta.
 Ese consentimiento no se hereda a la jornada siguiente ni autoriza apuestas
 fuera de los partidos, importe máximo y presupuesto mostrados.
 
+## Usuarios autorizados
+
+El menú y la pantalla comprueban `AccesoApuestaJornada/{uid}` y solo permiten
+acceder cuando existe el documento con `activo: true`. Sin permiso, durante la
+comprobación o ante un error, el botón no aparece. La lista se administra desde
+la consola Firebase: documento con ID igual al UID de Authentication y campo
+booleano `activo: true`. `activo: false` o borrar el documento retira el acceso.
+No se usa el correo como identificador.
+
+Primer UID: `DBbLkTOEvqMTUP4zMAn7ap8iLFZ2`. Al iniciar sesión con ese UID en
+la app actualizada, se crea su permiso y la marca `_inicializacion` en una sola
+transacción. Las reglas permiten esta alta una única vez y únicamente a ese UID.
+La marca evita que borrar posteriormente el permiso reactive el acceso. Los
+clientes no pueden añadir más usuarios ni modificar permisos; se hace desde la
+consola o un proceso administrativo con IAM.
+
+**La colección se creará al ejecutar esa inicialización, después de publicar
+las reglas. No se ha creado desde este entorno ni se han desplegado reglas en
+producción.** El repositorio por sí solo no modifica Firebase. El puente también
+exige pertenecer a la lista para leer comandos o registrar actividad; sigue
+permitida una revocación válida de comandos propios tras perder el permiso.
+
 ## Flujo implementado
 
 1. Cargar los diez partidos con sus horarios; sin calendario completo se bloquea
@@ -102,7 +124,7 @@ escribir su propio canal de ensayo: no sustituyen un backend de órdenes reales.
   el paquete `test`; análisis estático de esos módulos sin incidencias.
 - Pruebas Python de progresión, fallos de red, reinicios, traslado entre PCs,
   revocación, proveedor y límites. Ejecución: ver README de Windows.
-- 18 comprobaciones de reglas superadas contra un emulador local Firestore:
+- 35 comprobaciones de reglas superadas contra un emulador local Firestore:
   dueño, aislamiento entre cuentas, anónimos, revocación, modo e inmutabilidad.
 - Formato Dart y `git diff --check` comprobados.
 

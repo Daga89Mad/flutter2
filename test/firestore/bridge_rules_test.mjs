@@ -1,5 +1,5 @@
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, Timestamp, writeBatch, deleteDoc, collection, getDocs } from 'firebase/firestore';
 import { readFileSync } from 'node:fs';
 const env = await initializeTestEnvironment({projectId:'demo-jornada', firestore:{host:'127.0.0.1',port:8089,rules:readFileSync(new URL('../../firestore.rules', import.meta.url),'utf8')}});
 const owner = env.authenticatedContext('owner').firestore();
@@ -12,6 +12,25 @@ async function ok(p){await assertSucceeds(p);checks++;}
 async function no(p){await assertFails(p);checks++;}
 try {
  await env.clearFirestore();
+ await env.withSecurityRulesDisabled(async context => {
+   await setDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:true});
+ });
+ const firstUid = 'DBbLkTOEvqMTUP4zMAn7ap8iLFZ2';
+ const first = env.authenticatedContext(firstUid).firestore();
+ await no(setDoc(doc(other,'AccesoApuestaJornada/other'), {activo:true}));
+ await no(setDoc(doc(other,`AccesoApuestaJornada/${firstUid}`), {activo:true}));
+ await no(setDoc(doc(first,`AccesoApuestaJornada/${firstUid}`), {activo:true}));
+ await no(setDoc(doc(first,'AccesoApuestaJornada/_inicializacion'), {uidInicial:firstUid}));
+ const batch = writeBatch(first);
+ batch.set(doc(first,`AccesoApuestaJornada/${firstUid}`), {activo:true});
+ batch.set(doc(first,'AccesoApuestaJornada/_inicializacion'), {uidInicial:firstUid});
+ await ok(batch.commit());
+ await ok(getDoc(doc(first,`AccesoApuestaJornada/${firstUid}`)));
+ await no(getDoc(doc(other,`AccesoApuestaJornada/${firstUid}`)));
+ await no(getDocs(collection(first,'AccesoApuestaJornada')));
+ await no(updateDoc(doc(first,`AccesoApuestaJornada/${firstUid}`), {activo:false}));
+ await no(deleteDoc(doc(first,'AccesoApuestaJornada/_inicializacion')));
+ await no(setDoc(doc(other,'PuenteJornada/other'),command));
  await ok(setDoc(doc(owner,'PuenteJornada/owner'),command));
  await ok(getDoc(doc(owner,'PuenteJornada/owner')));
  await no(getDoc(doc(other,'PuenteJornada/owner')));
@@ -31,5 +50,18 @@ try {
  await no(setDoc(doc(owner,'PuenteJornada/owner/Unexpected/doc'),state));
  await ok(setDoc(doc(owner,'LaLiga/Resultados/Jornadas/1/Partidos/one'),{Local:'A',Visitante:'B'}));
  await ok(getDoc(doc(other,'LaLiga/Resultados/Jornadas/1/Partidos/one')));
+ await env.withSecurityRulesDisabled(async context => {
+   await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
+   await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));
+ });
+ await no(getDoc(doc(owner,'PuenteJornada/owner')));
+ await no(setDoc(doc(owner,'PuenteJornada/owner'),{...command,requestId:'b'.repeat(32)}));
+ await no(setDoc(doc(owner,'PuenteJornada/owner/Estado/actual'),state));
+ await ok(updateDoc(doc(owner,'PuenteJornada/owner'),{action:'revoke',updatedAt:serverTimestamp()}));
+ const retry = writeBatch(first);
+ retry.set(doc(first,`AccesoApuestaJornada/${firstUid}`),{activo:true});
+ retry.set(doc(first,'AccesoApuestaJornada/_inicializacion'),{uidInicial:firstUid});
+ await no(retry.commit());
+ await no(getDoc(doc(anon,'AccesoApuestaJornada/owner')));
  console.log(`${checks} comprobaciones de reglas superadas.`);
 } finally {await env.cleanup();}
