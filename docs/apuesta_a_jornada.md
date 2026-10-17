@@ -7,11 +7,16 @@ incluyendo la ruta legacy de 2025-2026. Esta versión **solo simula**: no envía
 órdenes a una casa, no consulta cuotas/saldo reales y no tiene credenciales.
 El historial local se conserva por usuario, temporada y jornada. En modo PC,
 el OK y el estado del ensayo también se sincronizan en un canal privado de
-Firestore. No son contabilidad real. Instalación: [Windows](../windows_bridge/README.md).
+Firestore. No son contabilidad real. Instalación recomendada: [Windows C#/.NET](../windows_dotnet/README.md).
+También se conserva la [versión Python](../windows_bridge/README.md).
 
 El usuario ha elegido **un OK por jornada**, sustituyendo el OK por apuesta.
 Ese consentimiento no se hereda a la jornada siguiente ni autoriza apuestas
 fuera de los partidos, importe máximo y presupuesto mostrados.
+
+La versión .NET conserva este protocolo de Firebase y las mismas reglas. Su
+historial se guarda en archivos JSON con sustitución atómica; las referencias
+a SQLite de esta guía corresponden al compañero Python. Ambos son ensayos.
 
 ## Usuarios autorizados
 
