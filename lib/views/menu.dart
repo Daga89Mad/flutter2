@@ -4,14 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:plantillalogin/views/calculatorScreen.dart';
-import 'package:plantillalogin/views/LoginBody.dart';
-import 'package:plantillalogin/views/ResultsScreen.dart';
+import 'package:plantillalogin/views/loginBody.dart';
+import 'package:plantillalogin/views/resultsScreen.dart';
 import 'package:plantillalogin/views/createGroupScreen.dart';
 import 'package:plantillalogin/views/gameGroupsScreen.dart';
 import 'package:plantillalogin/views/searchGroupsScreen.dart';
 import 'package:plantillalogin/views/settingsScreen.dart';
 import 'package:plantillalogin/views/viewResultsScreen.dart';
 import 'package:plantillalogin/views/probabilidadExperimentalScreen.dart';
+import 'package:plantillalogin/views/apuestaJornadaScreen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
@@ -101,6 +102,15 @@ class MenuScreen extends StatelessWidget {
                   MaterialPageRoute(
                     builder: (_) => const ProbabilidadExperimentalScreen(),
                   ),
+                );
+              },
+            ),
+            _MenuButton(
+              icon: Icons.event_available,
+              label: 'Apuesta a jornada',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ApuestaJornadaScreen()),
                 );
               },
             ),
