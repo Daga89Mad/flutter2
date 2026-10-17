@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
 import 'package:plantillalogin/core/sportsDbFixture.dart';
+import 'package:plantillalogin/core/roundAuthorization.dart';
 
 void main() {
   final now = DateTime.utc(2026, 10, 17, 10);
@@ -160,5 +161,175 @@ void main() {
       DateTime.utc(2026, 10, 17, 12),
     );
     expect(sportsDbKickoff({'dateEvent': '2026-10-17'}), isNull);
+  });
+  List<RoundFixture> fullRound() =>
+      List.generate(10, (i) => fixture('$i', 12 + 3 * i));
+  RoundAuthorization authorize(
+    List<RoundFixture> matches, {
+    int budget = 51100,
+  }) => RoundAuthorization.issue(
+    scope: 'LaLiga/2026-2027/1',
+    fixtures: matches,
+    selectedIds: matches.map((m) => m.id).toSet(),
+    budgetCents: budget,
+    rehearsalOdds: 3.2,
+    now: now,
+  );
+  List<RoundFixture> firstLost(List<RoundFixture> matches) => [
+    fixture('0', 12, finished: true, homeGoals: 1, awayGoals: 0),
+    ...matches.skip(1),
+  ];
+
+  test('Una autorización permite la primera apuesta cerca del inicio', () {
+    final matches = fullRound();
+    final a = authorize(matches);
+    final next = a.next(
+      currentScope: 'LaLiga/2026-2027/1',
+      fixtures: matches,
+      bets: [],
+      now: DateTime.utc(2026, 10, 17, 11, 56),
+    );
+    expect(next.candidates.single.id, '0');
+    expect(next.cents, 100);
+  });
+  test('El mismo OK permite la siguiente apuesta tras una derrota final', () {
+    final matches = fullRound();
+    final a = authorize(matches);
+    final next = a.next(
+      currentScope: 'LaLiga/2026-2027/1',
+      fixtures: firstLost(matches),
+      bets: [bet('0', 100)],
+      now: DateTime.utc(2026, 10, 17, 14, 56),
+    );
+    expect(next.candidates.single.id, '1');
+    expect(next.cents, 200);
+  });
+  test('No adelanta una apuesta a horas antes del inicio', () {
+    final matches = fullRound();
+    expect(
+      authorize(matches)
+          .next(
+            currentScope: 'LaLiga/2026-2027/1',
+            fixtures: matches,
+            bets: [],
+            now: now,
+          )
+          .canPrepare,
+      isFalse,
+    );
+  });
+  test('El OK de una jornada no autoriza la siguiente', () {
+    final matches = fullRound();
+    expect(
+      authorize(matches)
+          .next(
+            currentScope: 'LaLiga/2026-2027/2',
+            fixtures: matches,
+            bets: [],
+            now: now,
+          )
+          .stopped,
+      isTrue,
+    );
+  });
+  test('Una modificación de horario invalida el OK previo', () {
+    final matches = fullRound();
+    final modified = [
+      matches.first.withKickoff(DateTime.utc(2026, 10, 17, 13)),
+      ...matches.skip(1),
+    ];
+    expect(
+      authorize(matches)
+          .next(
+            currentScope: 'LaLiga/2026-2027/1',
+            fixtures: modified,
+            bets: [],
+            now: now,
+          )
+          .stopped,
+      isTrue,
+    );
+  });
+  test('La autorización no gasta por encima del presupuesto acumulado', () {
+    final matches = fullRound();
+    final a = authorize(matches, budget: 100);
+    expect(
+      a
+          .next(
+            currentScope: 'LaLiga/2026-2027/1',
+            fixtures: firstLost(matches),
+            bets: [bet('0', 100)],
+            now: DateTime.utc(2026, 10, 17, 14, 56),
+          )
+          .stopped,
+      isTrue,
+    );
+  });
+  test('Un empate confirmado detiene una jornada autorizada', () {
+    final matches = fullRound();
+    final draw = [
+      fixture('0', 12, finished: true, homeGoals: 0, awayGoals: 0),
+      ...matches.skip(1),
+    ];
+    expect(
+      authorize(matches)
+          .next(
+            currentScope: 'LaLiga/2026-2027/1',
+            fixtures: draw,
+            bets: [],
+            now: DateTime.utc(2026, 10, 17, 14, 56),
+          )
+          .stopped,
+      isTrue,
+    );
+  });
+  test('Se exige elegir exactamente uno entre simultáneos antes del OK', () {
+    final matches = fullRound();
+    matches[1] = fixture('1', 12);
+    expect(() => authorize(matches), throwsStateError);
+    final chosen = matches.map((m) => m.id).toSet()..remove('1');
+    final a = RoundAuthorization.issue(
+      scope: 'LaLiga/2026-2027/1',
+      fixtures: matches,
+      selectedIds: chosen,
+      budgetCents: 51100,
+      rehearsalOdds: 3.2,
+      now: now,
+    );
+    expect(a.selectedIds.contains('0'), isTrue);
+    expect(a.selectedIds.contains('1'), isFalse);
+  });
+  test('No autoriza jornadas incompletas ni horarios desconocidos', () {
+    final matches = fullRound();
+    expect(() => authorize(matches.take(9).toList()), throwsStateError);
+    matches[9] = const RoundFixture(
+      id: '9',
+      home: 'Local 9',
+      away: 'Visitante 9',
+    );
+    expect(() => authorize(matches), throwsStateError);
+  });
+  test('Las selecciones, límites y caducidad sobreviven al guardado', () {
+    final matches = fullRound();
+    final original = authorize(matches, budget: 3100);
+    final restored = RoundAuthorization.fromJson(original.toJson());
+    expect(restored.scope, original.scope);
+    expect(restored.budgetCents, 3100);
+    expect(restored.selectedIds.length, 10);
+    expect(
+      restored
+          .next(
+            currentScope: restored.scope,
+            fixtures: matches,
+            bets: [],
+            now: restored.expiresAt,
+          )
+          .stopped,
+      isTrue,
+    );
+    expect(
+      () => RoundAuthorization.fromJson({...original.toJson(), 'mode': 'live'}),
+      throwsFormatException,
+    );
   });
 }

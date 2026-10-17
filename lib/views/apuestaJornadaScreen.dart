@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:plantillalogin/core/firebaseCrudService.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
 import 'package:plantillalogin/core/roundBettingStore.dart';
+import 'package:plantillalogin/core/roundAuthorization.dart';
 
 class ApuestaJornadaScreen extends StatefulWidget {
   const ApuestaJornadaScreen({super.key});
@@ -22,7 +23,8 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   bool _saving = false;
   bool _dialogOpen = false;
   String? _error;
-  String? _selectedId;
+  final Map<String, String> _choices = {};
+  String? _status;
   String? _uid;
   List<RoundFixture> _fixtures = [];
   RoundRehearsal _rehearsal = RoundRehearsal(bets: [], kickoffs: {});
@@ -31,6 +33,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   Timer? _clock;
   int _generation = 0;
   final _odds = TextEditingController();
+  final _budget = TextEditingController(text: '511');
 
   @override
   void initState() {
@@ -41,7 +44,10 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
     _season = _seasons.first;
     _load();
     _clock = Timer.periodic(const Duration(seconds: 10), (_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        unawaited(_advance());
+      }
     });
   }
 
@@ -50,6 +56,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
     _subscription?.cancel();
     _clock?.cancel();
     _odds.dispose();
+    _budget.dispose();
     super.dispose();
   }
 
@@ -129,7 +136,8 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       _error = null;
       _fixtures = [];
       _store = null;
-      _selectedId = null;
+      _choices.clear();
+      _status = null;
       _odds.clear();
     });
     await _subscription?.cancel();
@@ -145,6 +153,11 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       _store = store;
       _uid = uid;
       _rehearsal = rehearsal;
+      if (rehearsal.authorization != null) {
+        _budget.text = (rehearsal.authorization!.budgetCents / 100)
+            .toStringAsFixed(2);
+        _odds.text = rehearsal.authorization!.rehearsalOdds.toStringAsFixed(2);
+      }
       _subscription = _matches.snapshots().listen(
         (snap) {
           if (!mounted || generation != _generation) return;
@@ -153,6 +166,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
             _loading = false;
             _error = null;
           });
+          unawaited(_advance());
         },
         onError: (Object error) {
           if (!mounted || generation != _generation) return;
@@ -213,7 +227,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
       if (mounted)
         setState(() {
           _rehearsal = next;
-          _selectedId = null;
+          _choices.clear();
           _odds.clear();
         });
     } catch (e) {
@@ -223,45 +237,74 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
     }
   }
 
-  Future<void> _prepare() async {
-    if (_saving || _dialogOpen || _error != null) return;
-    final plan = _plan;
-    final selectedId =
-        _selectedId ??
-        (plan.candidates.length == 1 ? plan.candidates.single.id : null);
-    final explicitlySelected = _selectedId != null;
-    final selected = plan.candidates
-        .where((m) => m.id == selectedId)
-        .firstOrNull;
+  String get _scope => 'LaLiga/$_season/$_round';
+
+  Set<String> _selectedFor(List<List<RoundFixture>> groups) => {
+    for (final group in groups)
+      if (group.length == 1)
+        group.single.id
+      else if (_choices[group.first.id] != null)
+        _choices[group.first.id]!,
+  };
+
+  Future<void> _approveRound() async {
+    if (_saving || _dialogOpen || _loading || _error != null || _store == null)
+      return;
+    final groups = RoundAuthorization.groups(
+      _effectiveFixtures,
+      DateTime.now(),
+    );
     final odds = double.tryParse(_odds.text.trim().replaceAll(',', '.'));
-    if (selected == null ||
-        odds == null ||
-        !odds.isFinite ||
-        odds < RoundBetting.minimumOdds) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Elige un partido e introduce una cuota de al menos 2,80.',
-          ),
-        ),
+    final budget = double.tryParse(_budget.text.trim().replaceAll(',', '.'));
+    if (odds == null ||
+        budget == null ||
+        !budget.isFinite ||
+        budget < 1 ||
+        budget > 511) {
+      _notify(
+        'Introduce un presupuesto de 1 a 511 € y una cuota de ensayo de al menos 2,80.',
       );
+      return;
+    }
+    late RoundAuthorization draft;
+    try {
+      draft = RoundAuthorization.issue(
+        scope: _scope,
+        fixtures: _effectiveFixtures,
+        selectedIds: _selectedFor(groups),
+        budgetCents: (budget * 100).round(),
+        rehearsalOdds: odds,
+        now: DateTime.now(),
+      );
+      final spent = _rehearsal.bets.fold<int>(0, (sum, b) => sum + b.cents);
+      if (draft.budgetCents <= spent)
+        throw StateError(
+          'El presupuesto debe cubrir lo ya simulado y la siguiente apuesta.',
+        );
+    } catch (e) {
+      _notify('$e');
       return;
     }
     final generation = _generation;
     final expires = DateTime.now().add(const Duration(seconds: 60));
     setState(() => _dialogOpen = true);
-    final approved = await showDialog<bool>(
+    final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('Confirmar apuesta simulada'),
+        title: Text('Autorizar jornada $_round · simulación'),
+        scrollable: true,
         content: Text(
-          '${selected.label}\n${_date(selected.kickoff)}\n'
-          'Selección: empate · A favor\nImporte: ${_money(plan.cents)}\n'
-          'Cuota introducida: ${odds.toStringAsFixed(2)}\n'
-          'Beneficio si aciertas: ${((plan.cents / 100) * (odds - 1)).toStringAsFixed(2)} € '
-          'antes de comisiones.\n\nAutorización válida durante 60 segundos.\n'
-          'Este OK solo registra una simulación. No envía dinero a Betfair.',
+          'LaLiga · $_season · jornada $_round\n'
+          'Inicio: 1 €. Duplicar tras derrota final. Máximo por apuesta: 256 €.\n'
+          'Presupuesto total de la jornada: ${_money(draft.budgetCents)}.\n'
+          'Cuota mínima: 2,80. Cuota ficticia del ensayo: ${odds.toStringAsFixed(2)}.\n\n'
+          '${_effectiveFixtures.where((m) => draft.selectedIds.contains(m.id)).map((m) => '${m.label} · ${_date(m.kickoff)}').join('\n')}\n\n'
+          'Este OK permite simular las apuestas elegidas sin más confirmaciones '
+          'durante esta jornada. Se detiene al confirmar cualquier empate, '
+          'alcanzar el presupuesto o el límite. La próxima jornada necesita otro OK.\n\n'
+          'No se enviará dinero real. El ensayo solo avanza con esta pantalla abierta '
+          'y resultados actualizados en Firestore. Puedes detenerlo en cualquier momento.',
         ),
         actions: [
           TextButton(
@@ -270,7 +313,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('OK · simular apuesta'),
+            child: const Text('OK · autorizar jornada'),
           ),
         ],
       ),
@@ -278,63 +321,150 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
     if (!mounted) return;
     setState(() {
       _dialogOpen = false;
-      _saving = approved == true;
+      _saving = confirmed == true;
     });
-    if (approved != true) return;
+    if (confirmed != true) return;
     try {
-      if (generation != _generation || !DateTime.now().isBefore(expires)) {
-        throw StateError(
-          'La preparación ha caducado. Prepara y confirma otra vez.',
-        );
-      }
-      // Relectura del servidor tras el OK. Un error nunca se interpreta como permiso.
       final fresh = await _matches.get(const GetOptions(source: Source.server));
       if (!mounted || generation != _generation) return;
       _fixtures = fresh.docs.map(_fixture).toList();
-      final current = _plan;
-      final stillSelected = current.candidates
-          .where((m) => m.id == selected.id)
-          .firstOrNull;
       if (!DateTime.now().isBefore(expires) ||
-          !current.canPrepare ||
-          current.cents != plan.cents ||
-          stillSelected == null ||
-          (current.candidates.length > 1 && !explicitlySelected) ||
-          stillSelected.kickoff != selected.kickoff ||
-          FirebaseAuth.instance.currentUser?.uid != _uid) {
+          FirebaseAuth.instance.currentUser?.uid != _uid ||
+          draft.schedule !=
+              RoundAuthorization.fingerprint(_effectiveFixtures)) {
         throw StateError(
-          'Han cambiado los partidos o el importe. Revisa y vuelve a confirmar.',
+          'La preparación caducó o cambió el calendario. Revisa y confirma otra vez.',
         );
       }
+      // Revalida también horarios, empates y las elecciones tras la lectura fresca.
+      final authorization = RoundAuthorization.issue(
+        scope: _scope,
+        fixtures: _effectiveFixtures,
+        selectedIds: draft.selectedIds,
+        budgetCents: draft.budgetCents,
+        rehearsalOdds: draft.rehearsalOdds,
+        now: DateTime.now(),
+      );
+      final next = RoundRehearsal(
+        bets: _rehearsal.bets,
+        kickoffs: _rehearsal.kickoffs,
+        authorization: authorization,
+      );
+      await _store!.save(next);
+      if (mounted)
+        setState(() {
+          _rehearsal = next;
+          _status = 'Jornada autorizada para simulación.';
+        });
+    } catch (e) {
+      if (mounted) _notify('$e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+    if (mounted) unawaited(_advance());
+  }
+
+  void _notify(String text) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> _revoke(String message) async {
+    final next = RoundRehearsal(
+      bets: _rehearsal.bets,
+      kickoffs: _rehearsal.kickoffs,
+    );
+    await _store!.save(next);
+    if (mounted)
+      setState(() {
+        _rehearsal = next;
+        _status = message;
+      });
+  }
+
+  Future<void> _stop([
+    String message = 'Autorización revocada. No se simularán más apuestas.',
+  ]) async {
+    if (_saving || _store == null) return;
+    setState(() => _saving = true);
+    try {
+      await _revoke(message);
+    } catch (e) {
+      if (mounted) _notify('$e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _advance() async {
+    final authorization = _rehearsal.authorization;
+    if (!mounted ||
+        _loading ||
+        _saving ||
+        _dialogOpen ||
+        _error != null ||
+        authorization == null ||
+        _store == null ||
+        FirebaseAuth.instance.currentUser?.uid != _uid)
+      return;
+    final generation = _generation;
+    // El plan local evita lecturas de servidor cada diez segundos si no hay una apuesta próxima.
+    final preview = authorization.next(
+      currentScope: _scope,
+      fixtures: _effectiveFixtures,
+      bets: _rehearsal.bets,
+      now: DateTime.now(),
+    );
+    if (!preview.canPrepare) {
+      if (preview.stopped) {
+        await _stop(preview.message);
+        return;
+      }
+      if (mounted) setState(() => _status = preview.message);
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final fresh = await _matches.get(const GetOptions(source: Source.server));
+      if (!mounted || generation != _generation) return;
+      _fixtures = fresh.docs.map(_fixture).toList();
+      if (FirebaseAuth.instance.currentUser?.uid != _uid) return;
+      final plan = authorization.next(
+        currentScope: _scope,
+        fixtures: _effectiveFixtures,
+        bets: _rehearsal.bets,
+        now: DateTime.now(),
+      );
+      if (!plan.canPrepare) {
+        if (plan.stopped) {
+          await _revoke(plan.message);
+        } else {
+          setState(() => _status = plan.message);
+        }
+        return;
+      }
+      final fixture = plan.candidates.single;
       final next = RoundRehearsal(
         kickoffs: _rehearsal.kickoffs,
+        authorization: authorization,
         bets: [
           ..._rehearsal.bets,
           RehearsalBet(
-            matchId: selected.id,
-            label: selected.label,
-            cents: current.cents,
-            odds: odds,
+            matchId: fixture.id,
+            label: fixture.label,
+            cents: plan.cents,
+            odds: authorization.rehearsalOdds,
             approvedAt: DateTime.now(),
           ),
         ],
       );
       await _store!.save(next);
-      if (!mounted) return;
-      setState(() {
-        _rehearsal = next;
-        _selectedId = null;
-        _odds.clear();
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Simulación registrada. Ninguna apuesta real enviada.'),
-        ),
-      );
-    } catch (e) {
       if (mounted)
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+        setState(() {
+          _rehearsal = next;
+          _status =
+              'Simulada automáticamente: ${fixture.label} · ${_money(plan.cents)}. Ninguna orden real enviada.';
+        });
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Ensayo en espera: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -343,13 +473,15 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
   @override
   Widget build(BuildContext context) {
     final plan = _plan;
+    final authorization = _rehearsal.authorization;
+    final groups = RoundAuthorization.groups(
+      _effectiveFixtures,
+      DateTime.now(),
+    );
     final busy = _loading || _saving || _dialogOpen;
-    final candidates = plan.candidates;
-    // La elección de simultáneos nunca se hace de forma automática.
-    final selectedId =
-        _selectedId ?? (candidates.length == 1 ? candidates.single.id : null);
-    final selectedValid = candidates.any((m) => m.id == selectedId);
+    final locked = busy || authorization != null;
     final byId = {for (final m in _fixtures) m.id: m};
+    final spent = _rehearsal.bets.fold<int>(0, (sum, b) => sum + b.cents);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Apuesta a jornada'),
@@ -368,9 +500,10 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
             child: Padding(
               padding: EdgeInsets.all(12),
               child: Text(
-                'SIMULACIÓN · Betfair sin conectar\n'
-                'Cada apuesta requiere tu OK. No se envía dinero real. '
-                'El historial se guarda solo en este dispositivo.',
+                'SIMULACIÓN · Un OK por jornada\n'
+                'Después del OK se simula la secuencia elegida sin más confirmaciones. '
+                'No se envía dinero real. Mantén esta pantalla abierta y los resultados actualizados. '
+                'La ejecución con la app cerrada requiere un servicio externo todavía sin conectar.',
               ),
             ),
           ),
@@ -386,7 +519,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
                   items: _seasons
                       .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                       .toList(),
-                  onChanged: busy
+                  onChanged: locked
                       ? null
                       : (s) {
                           if (s != null) {
@@ -406,7 +539,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
                     (i) =>
                         DropdownMenuItem(value: i + 1, child: Text('${i + 1}')),
                   ),
-                  onChanged: busy
+                  onChanged: locked
                       ? null
                       : (r) {
                           if (r != null) {
@@ -421,7 +554,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
           const SizedBox(height: 16),
           const Text(
             '1 € → 2 € → 4 €… máximo 256 €. Cuota mínima 2,80.\n'
-            'Cada jornada reinicia en 1 €. Un empate final en cualquier partido detiene la jornada.',
+            'Cada jornada empieza en 1 € y necesita su propio OK. Un empate final en cualquier partido detiene la jornada.',
           ),
           if (_loading)
             const Padding(
@@ -435,54 +568,109 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
             ),
           if (!_loading && _error == null) ...[
             const SizedBox(height: 16),
-            Text(plan.message, style: Theme.of(context).textTheme.titleMedium),
-            if (plan.canPrepare) ...[
-              Text('Próximo importe: ${_money(plan.cents)}'),
-              ...candidates.map(
-                (m) => Card(
-                  child: ListTile(
-                    leading: Icon(
-                      selectedId == m.id
-                          ? Icons.radio_button_checked
-                          : Icons.radio_button_off,
+            Text(
+              _status ?? plan.message,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            Text('Total simulado en esta jornada: ${_money(spent)}'),
+            if (authorization != null) ...[
+              Text(
+                'Límite autorizado: ${_money(authorization.budgetCents)} · válido hasta ${_date(authorization.expiresAt)}',
+              ),
+              ..._effectiveFixtures
+                  .where((m) => authorization.selectedIds.contains(m.id))
+                  .map(
+                    (m) => ListTile(
+                      leading: const Icon(Icons.check_circle_outline),
+                      title: Text(m.label),
+                      subtitle: Text(_date(m.kickoff)),
                     ),
-                    title: Text(m.label),
-                    subtitle: Text(_date(m.kickoff)),
-                    selected: selectedId == m.id,
-                    onTap: busy
-                        ? null
-                        : () => setState(() {
-                            _selectedId = m.id;
-                            _odds.clear();
-                          }),
+                  ),
+              OutlinedButton.icon(
+                onPressed: busy ? null : _stop,
+                icon: const Icon(Icons.stop_circle_outlined),
+                label: const Text('Detener jornada y revocar OK'),
+              ),
+            ] else ...[
+              Text(
+                'Elige un partido por grupo antes de autorizar',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              ...groups.indexed.map(
+                (entry) => Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Grupo ${entry.$1 + 1}${entry.$2.length > 1 ? ' · horarios solapados' : ''}',
+                        ),
+                        ...entry.$2.map((m) {
+                          final selected =
+                              entry.$2.length == 1 ||
+                              _choices[entry.$2.first.id] == m.id;
+                          return ListTile(
+                            leading: Icon(
+                              selected
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_off,
+                            ),
+                            title: Text(m.label),
+                            subtitle: Text(_date(m.kickoff)),
+                            selected: selected,
+                            onTap: locked
+                                ? null
+                                : () => setState(
+                                    () => _choices[entry.$2.first.id] = m.id,
+                                  ),
+                          );
+                        }),
+                      ],
+                    ),
                   ),
                 ),
               ),
               TextField(
-                controller: _odds,
-                enabled: !busy,
+                controller: _budget,
+                enabled: !locked,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
                 decoration: const InputDecoration(
-                  labelText: 'Cuota del empate para simular',
-                  helperText: 'Introducción manual. No es una cuota verificada de Betfair.',
+                  labelText: 'Presupuesto máximo de la jornada (€)',
+                  helperText: 'Incluye todas las apuestas de esta jornada. Nueve derrotas de 1 a 256 € suman 511 €.',
+                ),
+              ),
+              TextField(
+                controller: _odds,
+                enabled: !locked,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Cuota ficticia para todo el ensayo',
+                  helperText: 'Manual, mínimo 2,80. No es una cuota obtenida de una casa de apuestas.',
                 ),
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: busy || !selectedValid ? null : _prepare,
+                onPressed: busy || plan.stopped || groups.isEmpty
+                    ? null
+                    : _approveRound,
                 icon: const Icon(Icons.fact_check_outlined),
-                label: const Text('Preparar apuesta'),
+                label: const Text('Revisar y autorizar jornada'),
               ),
             ],
             const SizedBox(height: 24),
             Text(
-              'Partidos de la jornada · hora local del dispositivo',
+              'Partidos · hora local del dispositivo',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (_fixtures.isEmpty)
-              const Text('Usa «Cargar resultados» para importar esta jornada.'),
+              const Text(
+                'Usa «Cargar resultados» para importar los diez partidos de esta jornada.',
+              ),
             ..._effectiveFixtures.map(
               (m) => ListTile(
                 title: Text(m.label),
@@ -498,7 +686,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
                     : IconButton(
                         icon: const Icon(Icons.edit_calendar),
                         tooltip: 'Ajustar horario solo para simular',
-                        onPressed: busy ? null : () => _editKickoff(m),
+                        onPressed: locked ? null : () => _editKickoff(m),
                       ),
               ),
             ),
@@ -508,7 +696,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (_rehearsal.bets.isEmpty)
-              const Text('Todavía no has confirmado ninguna apuesta simulada.'),
+              const Text('Todavía no se ha simulado ninguna apuesta.'),
             ..._rehearsal.bets.map((b) {
               final m = byId[b.matchId];
               final result = m == null || !m.hasResult
@@ -519,7 +707,7 @@ class _ApuestaJornadaState extends State<ApuestaJornadaScreen> {
               return ListTile(
                 title: Text(b.label),
                 subtitle: Text(
-                  '${_money(b.cents)} · cuota ${b.odds.toStringAsFixed(2)}\n$result',
+                  '${_money(b.cents)} · cuota ficticia ${b.odds.toStringAsFixed(2)}\n$result',
                 ),
               );
             }),

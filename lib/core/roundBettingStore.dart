@@ -2,11 +2,17 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
+import 'package:plantillalogin/core/roundAuthorization.dart';
 
 class RoundRehearsal {
   final List<RehearsalBet> bets;
   final Map<String, DateTime> kickoffs;
-  RoundRehearsal({required this.bets, required this.kickoffs});
+  final RoundAuthorization? authorization;
+  RoundRehearsal({
+    required this.bets,
+    required this.kickoffs,
+    this.authorization,
+  });
 }
 
 /// Un registro local por usuario/temporada/jornada; nunca representa una orden real.
@@ -29,6 +35,11 @@ class RoundBettingStore {
       kickoffs: (data['kickoffs'] as Map<String, dynamic>).map(
         (id, value) => MapEntry(id, DateTime.parse(value as String)),
       ),
+      authorization: data['authorization'] == null
+          ? null
+          : RoundAuthorization.fromJson(
+              Map<String, dynamic>.from(data['authorization'] as Map),
+            ),
     );
   }
 
@@ -37,6 +48,7 @@ class RoundBettingStore {
       key,
       jsonEncode({
         'bets': rehearsal.bets.map((b) => b.toJson()).toList(),
+        'authorization': rehearsal.authorization?.toJson(),
         'kickoffs': rehearsal.kickoffs.map(
           (id, time) => MapEntry(id, time.toUtc().toIso8601String()),
         ),
