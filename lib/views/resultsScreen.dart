@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:plantillalogin/core/firebaseCrudService.dart'; // Ajusta la ruta si tu servicio está en otro paquete
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:plantillalogin/core/sportsDbFixture.dart';
 
 class ResultsScreen extends StatefulWidget {
   const ResultsScreen({super.key});
@@ -203,6 +204,10 @@ class _ResultsScreenState extends State<ResultsScreen> {
           'Visitante': away,
           'Jornada': jornada,
           'Temporada': _selectedSeason,
+          'Estado': ev['strStatus']?.toString() ?? '',
+          'Finalizado': sportsDbFinished(ev as Map),
+          if (sportsDbKickoff(ev) != null)
+            'InicioUTC': Timestamp.fromDate(sportsDbKickoff(ev)!),
         };
 
         await service.upsertMatch(

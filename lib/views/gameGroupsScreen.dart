@@ -5,7 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:plantillalogin/views/BetListScreen.dart';
+import 'package:plantillalogin/views/betListScreen.dart';
 import 'package:plantillalogin/views/betScreen.dart';
 import 'package:plantillalogin/views/transferScreen.dart';
 
