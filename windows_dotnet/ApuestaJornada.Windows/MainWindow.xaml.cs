@@ -59,7 +59,7 @@ public partial class MainWindow : Window
                         // Persistencia y JSON fuera del hilo de la interfaz.
                         var state = await Task.Run(() => worker.TickAsync(ct), ct);
                         Status.Text = J.Text(state["message"]);
-                        Round.Text = J.Optional(state["scope"]) is { Length: > 0 } scope ? $"{scope} · Total simulado: {J.Int(state["spentCents"]) / 100.0:0.00} €" : "Sin jornada autorizada.";
+                        Round.Text = J.Optional(state["scope"]) is { Length: > 0 } scope ? $"{scope} · Simulado en este ensayo: {J.Int(state["spentCents"]) / 100.0:0.00} €" : "Sin jornada autorizada.";
                         LastSeen.Text = "Última confirmación: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
                         History.ItemsSource = Bet.List(state["bets"]).Select(b => new { Match = b.Label, Amount = $"{b.Cents / 100.0:0.00} €", Odds = b.Odds.ToString("0.00") }).ToList();
                     }

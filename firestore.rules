@@ -240,13 +240,21 @@ service cloud.firestore {
     function validRoundCommand(d) {
       return d.keys().hasOnly(['schema', 'mode', 'requestId', 'action', 'scope', 'authorization', 'initialBets', 'updatedAt'])
         && d.keys().hasAll(['schema', 'mode', 'requestId', 'action', 'scope', 'authorization', 'initialBets', 'updatedAt'])
-        && d.schema == 1 && d.mode == 'simulation'
+        && d.schema in [1, 2] && d.mode == 'simulation'
         && d.requestId is string && d.requestId.matches('[a-f0-9]{32}')
         && d.action in ['authorize', 'revoke']
         && d.scope is string && d.scope.matches('LaLiga/[0-9]{4}-[0-9]{4}/([1-9]|[12][0-9]|3[0-8])')
         && d.authorization is map
-        && d.authorization.keys().hasOnly(['mode', 'scope', 'schedule', 'selectedIds', 'budgetCents', 'rehearsalOdds', 'approvedAt', 'expiresAt'])
-        && d.authorization.mode == 'round-simulation-v1'
+        && d.authorization.keys().hasOnly(['mode', 'scope', 'schedule', 'selectedIds', 'budgetCents', 'rehearsalOdds', 'approvedAt', 'expiresAt', 'startMode', 'baselineFinishedIds', 'previousSpentCents'])
+        && ((d.schema == 1 && d.authorization.mode == 'round-simulation-v1'
+          && !d.authorization.keys().hasAny(['startMode', 'baselineFinishedIds', 'previousSpentCents']))
+        || (d.schema == 2 && d.authorization.mode == 'round-simulation-v2'
+          && d.authorization.startMode == 'from-now'
+          && d.authorization.baselineFinishedIds is list && d.authorization.baselineFinishedIds.size() <= 9
+          && d.authorization.baselineFinishedIds.toSet().size() == d.authorization.baselineFinishedIds.size()
+          && d.authorization.previousSpentCents is int && d.authorization.previousSpentCents >= 0 && d.authorization.previousSpentCents <= 51000
+          && d.authorization.previousSpentCents + 100 <= d.authorization.budgetCents
+          && d.initialBets is list && d.initialBets.size() == 0))
         && d.authorization.scope == d.scope
         && d.authorization.schedule is string && d.authorization.schedule.size() < 20000
         && d.authorization.selectedIds is list && d.authorization.selectedIds.size() > 0 && d.authorization.selectedIds.size() <= 10

@@ -50,6 +50,27 @@ var events=new JsonArray(Fixtures().Select(m=>(JsonNode)new JsonObject { ["strHo
 Check(!SportsDbResults.Match(Fixtures(),events)[0].Draw,"Proveedor: 0-0 pendiente");
 Reject(()=>SportsDbResults.Match(Fixtures(),new JsonArray()),"Proveedor incompleto bloquea");
 
+var midNow = new DateTimeOffset(2026,10,18,15,0,0,TimeSpan.Zero);
+JsonObject MidRaw() => J.Object(JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"dart_authorization_midround.json"))));
+List<Fixture> MidFixtures() => Enumerable.Range(0,10).Select(i=>new Fixture(i.ToString(),$"Local {i}",$"Visitante {i}",midNow.AddHours((i-2)*3).AddMinutes(4),i<2,i<2?1:null,i==0?1:i==1?0:null)).ToList();
+var mid=Authorization.Parse(MidRaw());
+Check(mid.FromNow && mid.BaselineFinishedIds.SetEquals(["0","1"]) && mid.PreviousSpentCents==300,"Contrato Dart v2 conserva baseline y gasto");
+Check(Engine.Decide(mid,MidFixtures(),[],midNow) is {Status:"ready",Cents:100,Match.Id:"2"},"Inicio a mitad de jornada tras empate previo");
+var midUpdated=MidFixtures();midUpdated[3]=midUpdated[3] with {Finished=true,HomeGoals=0,AwayGoals=0};
+Check(Engine.Decide(mid,midUpdated,[],midNow).Status=="stopped","Segundo empate no elegido detiene nuevo ensayo");
+midUpdated=MidFixtures();midUpdated[2]=midUpdated[2] with {Finished=true,HomeGoals=1,AwayGoals=0};
+var midBet=new Bet("2","nuevo",100,3.2,midNow);
+Check(Engine.Decide(mid,midUpdated,[midBet],midNow.AddHours(3)) is {Status:"ready",Cents:200},"Solo duplica pérdidas del ensayo nuevo");
+Check(Engine.Decide(mid with {PreviousSpentCents=51000},midUpdated,[midBet],midNow.AddHours(3)).Status=="stopped","Gasto previo limita el nuevo ensayo");
+midUpdated=MidFixtures();midUpdated[0]=midUpdated[0] with {Finished=false};
+Check(Engine.Decide(mid,midUpdated,[],midNow).Status=="stopped","No ignora pérdida de confirmación anterior");
+Check(Engine.Decide(mid,MidFixtures(),[new Bet("0","anterior",100,3.2,midNow)],midNow).Status=="stopped","No reaprovecha apuestas del baseline");
+foreach(var node in new JsonNode[]{new JsonArray("ajeno"),new JsonArray("0","0"),new JsonArray("2")})
+{var invalid=MidRaw();invalid["baselineFinishedIds"]=node;Reject(()=>Authorization.Parse(invalid),"Baseline v2 inválido rechazado");}
+foreach(var value in new[]{-1,51100,int.MaxValue})
+{var invalid=MidRaw();invalid["previousSpentCents"]=value;Reject(()=>Authorization.Parse(invalid),"Acumulado v2 inválido rechazado");}
+var mixed=MidRaw();mixed["mode"]="round-simulation-v1";Reject(()=>Authorization.Parse(mixed),"v1 no admite campos de reinicio");
+
 var temp=Path.Combine(Path.GetTempPath(),"jornada-tests-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(temp);
 try
 {
@@ -80,6 +101,14 @@ try
  var newRound=new FakeClient(Raw(),Fixtures());newRound.Command.Data["requestId"]=new string('b',32);
  state=await new BridgeWorker(newRound,ledger,provider,"pc",()=>now).TickAsync(default);
  Check(Bet.List(state["bets"])[0].Cents==100,"Nuevo OK reinicia en un euro");
+ var midClient=new FakeClient(MidRaw(),MidFixtures());
+ var midLedger=new Ledger(Path.Combine(temp,"midround"));
+ state=await new BridgeWorker(midClient,midLedger,provider,"pc",()=>midNow).TickAsync(default);
+ Check(Bet.List(state["bets"])[0].Cents==100,"Trabajador v2 registra primer ensayo tras empate viejo");
+ midClient.Command.Data["schema"]=1;midClient.Command=new(midClient.Command.Data,"mismatch");
+ await RejectAsync(()=>new BridgeWorker(midClient,midLedger,provider,"pc",()=>midNow).TickAsync(default),"No acepta mezclar esquema y modo");
+ var imported=new FakeClient(MidRaw(),MidFixtures());imported.Command.Data["initialBets"]=Ledger.Array([new Bet("0","viejo",100,3.2,midNow)]);
+ await RejectAsync(()=>new BridgeWorker(imported,new Ledger(Path.Combine(temp,"imported")),provider,"pc",()=>midNow).TickAsync(default),"Reinicio v2 no importa apuestas de otro ensayo");
  var corrupt=new Ledger(Path.Combine(temp,"corrupt"));corrupt.Initialize(new string('a',32),"hash",[]);File.WriteAllText(Path.Combine(temp,"corrupt",new string('a',32)+".json"),"roto");
  Reject(()=>corrupt.Initialize(new string('a',32),"hash",[]),"Archivo dañado no se reinicia silenciosamente");
 }
@@ -97,7 +126,7 @@ sealed class FakeClient : IBridgeClient
  public string CommandPath=>"command";public string StatePath=>"state";
  public Document Command; public Document? State;public bool FailState, RevokeOnSecondCommand;private int reads,revision;private readonly List<Fixture> fixtures;
  public FakeClient(JsonObject auth,List<Fixture> fixtures)
- {this.fixtures=fixtures;Command=new(new(){["schema"]=1,["mode"]="simulation",["requestId"]=new string('a',32),["scope"]=J.Text(auth["scope"]),["authorization"]=auth,["initialBets"]=new JsonArray(),["action"]="authorize"},"v1");}
+ {this.fixtures=fixtures;Command=new(new(){["schema"]=J.Text(auth["mode"])=="round-simulation-v2"?2:1,["mode"]="simulation",["requestId"]=new string('a',32),["scope"]=J.Text(auth["scope"]),["authorization"]=auth,["initialBets"]=new JsonArray(),["action"]="authorize"},"v1");}
  public Task<Document?> GetAsync(string path,CancellationToken ct)
  {
   ct.ThrowIfCancellationRequested();

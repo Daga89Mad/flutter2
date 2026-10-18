@@ -51,10 +51,12 @@ public sealed class BridgeWorker(IBridgeClient client, Ledger ledger, IResultsPr
         if (command is not null)
         {
             var c = command.Data;
-            if (J.Int(c["schema"]) != 1 || J.Text(c["mode"]) != "simulation") throw new InvalidDataException("Solo se admiten ensayos de la app.");
+            var schema = J.Int(c["schema"]);
+            if (schema is not (1 or 2) || J.Text(c["mode"]) != "simulation") throw new InvalidDataException("Solo se admiten ensayos de la app.");
             var id = J.Text(c["requestId"]);
             if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) throw new InvalidDataException("Identificador de autorización no válido.");
             var auth = Authorization.Parse(c["authorization"]);
+            if ((schema == 2) != auth.FromNow) throw new InvalidDataException("La versión del OK no coincide con el protocolo.");
             if (J.Text(c["scope"]) != auth.Scope) throw new InvalidDataException("La jornada no coincide con el OK.");
             state["requestId"] = id; state["scope"] = auth.Scope;
             var same = previous is not null && J.Optional(previous["requestId"]) == id;
@@ -62,6 +64,7 @@ public sealed class BridgeWorker(IBridgeClient client, Ledger ledger, IResultsPr
             var immutable = new JsonObject { ["scope"] = c["scope"]?.DeepClone(), ["authorization"] = c["authorization"]?.DeepClone(), ["initialBets"] = c["initialBets"]?.DeepClone() };
             var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(J.Canonical(immutable))));
             var initial = Bet.List(c["initialBets"]);
+            if (auth.FromNow && initial.Count != 0) throw new InvalidDataException("Un nuevo ensayo empieza sin apuestas previas; el gasto anterior se conserva por separado.");
             var remote = same && previous!["bets"] is JsonArray ? Bet.List(previous["bets"]) : initial;
             Ledger.Validate(remote);
             if (remote.Count < initial.Count || !remote.Take(initial.Count).SequenceEqual(initial)) throw new InvalidDataException("El historial remoto no conserva el historial autorizado.");
@@ -108,6 +111,7 @@ public sealed class BridgeWorker(IBridgeClient client, Ledger ledger, IResultsPr
                 if (plan.Status == "stopped") ledger.Terminate(id, plan.Message);
                 state["status"] = plan.Status; state["message"] = plan.Message;
             }
+            if (auth.FromNow) state["message"] = $"Desde ahora · {auth.BaselineFinishedIds.Count} partidos anteriores fuera del ensayo · {auth.PreviousSpentCents / 100.0:0.00} € simulados previamente. " + J.Text(state["message"]);
         }
         state["bets"] = Ledger.Array(bets); state["spentCents"] = bets.Sum(b => b.Cents);
         state["lastSeenAt"] = J.Iso(Now); state["leaseUntil"] = J.Iso(Now.AddSeconds(60));

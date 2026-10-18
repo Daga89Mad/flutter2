@@ -1,21 +1,11 @@
 import 'dart:convert';
 
+import 'roundRehearsal.dart';
+export 'roundRehearsal.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
 import 'package:plantillalogin/core/roundAuthorization.dart';
-
-class RoundRehearsal {
-  final List<RehearsalBet> bets;
-  final Map<String, DateTime> kickoffs;
-  final RoundAuthorization? authorization;
-  final String? pcRequestId;
-  RoundRehearsal({
-    required this.bets,
-    required this.kickoffs,
-    this.authorization,
-    this.pcRequestId,
-  });
-}
 
 /// Un registro local por usuario/temporada/jornada; nunca representa una orden real.
 class RoundBettingStore {
@@ -30,6 +20,14 @@ class RoundBettingStore {
     final data = jsonDecode(raw) as Map<String, dynamic>;
     return RoundRehearsal(
       pcRequestId: data['pcRequestId'] as String?,
+      carriedSpentCents: data['carriedSpentCents'] as int? ?? 0,
+      archives: ((data['archives'] as List?) ?? [])
+          .map(
+            (a) => ArchivedRoundSession.fromJson(
+              Map<String, dynamic>.from(a as Map),
+            ),
+          )
+          .toList(),
       bets: (data['bets'] as List)
           .map(
             (b) => RehearsalBet.fromJson(Map<String, dynamic>.from(b as Map)),
@@ -53,6 +51,8 @@ class RoundBettingStore {
         'bets': rehearsal.bets.map((b) => b.toJson()).toList(),
         'authorization': rehearsal.authorization?.toJson(),
         'pcRequestId': rehearsal.pcRequestId,
+        'carriedSpentCents': rehearsal.carriedSpentCents,
+        'archives': rehearsal.archives.map((a) => a.toJson()).toList(),
         'kickoffs': rehearsal.kickoffs.map(
           (id, time) => MapEntry(id, time.toUtc().toIso8601String()),
         ),

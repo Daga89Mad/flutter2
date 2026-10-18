@@ -50,6 +50,16 @@ try {
  await no(setDoc(doc(owner,'PuenteJornada/owner/Unexpected/doc'),state));
  await ok(setDoc(doc(owner,'LaLiga/Resultados/Jornadas/1/Partidos/one'),{Local:'A',Visitante:'B'}));
  await ok(getDoc(doc(other,'LaLiga/Resultados/Jornadas/1/Partidos/one')));
+ const v2 = {...command, schema:2, requestId:'b'.repeat(32), authorization:{...command.authorization,
+   mode:'round-simulation-v2', startMode:'from-now', baselineFinishedIds:['old'],previousSpentCents:0}};
+ await ok(setDoc(doc(owner,'PuenteJornada/owner'),v2));
+ await no(setDoc(doc(owner,'PuenteJornada/owner'),{...v2,requestId:'c'.repeat(32),schema:1}));
+ await no(setDoc(doc(owner,'PuenteJornada/owner'),{...command,requestId:'c'.repeat(32),schema:2}));
+ for (const extra of [{previousSpentCents:-1},{previousSpentCents:51100},{previousSpentCents:100},{baselineFinishedIds:['old','old']},{startMode:'auto-restart'}]) {
+   await no(setDoc(doc(owner,'PuenteJornada/owner'),{...v2,requestId:'c'.repeat(32),authorization:{...v2.authorization,...extra}}));
+ }
+ await no(setDoc(doc(owner,'PuenteJornada/owner'),{...v2,requestId:'c'.repeat(32),initialBets:[{mode:'simulation',cents:100}]}));
+ await ok(setDoc(doc(owner,'PuenteJornada/owner'),command));
  await env.withSecurityRulesDisabled(async context => {
    await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
    await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));

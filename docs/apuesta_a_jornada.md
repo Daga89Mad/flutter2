@@ -10,13 +10,35 @@ el OK y el estado del ensayo también se sincronizan en un canal privado de
 Firestore. No son contabilidad real. Instalación recomendada: [Windows C#/.NET](../windows_dotnet/README.md).
 También se conserva la [versión Python](../windows_bridge/README.md).
 
-El usuario ha elegido **un OK por jornada**, sustituyendo el OK por apuesta.
+El modo original usa **un OK por jornada**, sustituyendo el OK por apuesta.
+El modo opcional desde ahora exige un nuevo OK por cada reinicio explícito.
 Ese consentimiento no se hereda a la jornada siguiente ni autoriza apuestas
 fuera de los partidos, importe máximo y presupuesto mostrados.
 
 La versión .NET conserva este protocolo de Firebase y las mismas reglas. Su
 historial se guarda en archivos JSON con sustitución atómica; las referencias
 a SQLite de esta guía corresponden al compañero Python. Ambos son ensayos.
+
+## Jornada a medias y reinicio explícito
+
+La app permite activar **Empezar desde ahora · jornada a medias** antes del OK.
+La autorización congela la lista de todos los partidos ya finalizados, con
+marcadores visibles en la confirmación. Sus empates anteriores no detienen este
+nuevo ensayo. El primer empate final fuera de esa lista sí lo detiene, aunque
+el partido no esté seleccionado. Un final añadido mientras se confirma obliga
+a revisar un nuevo OK. No se autoriza con un partido iniciado sin final confirmado.
+
+Cada serie nueva comienza en 1 €, conserva el historial anterior y descuenta
+lo ya simulado de esa jornada del presupuesto acumulado. Un reinicio no amplía
+el límite total autorizado de 1 a 511 €. Nunca se rearma automáticamente.
+Si existía un ensayo del PC, primero debe confirmar que terminó o se revocó;
+la app reconcilia su historial antes de publicar el siguiente OK.
+
+El modo usa `schema: 2` y `round-simulation-v2`; el original mantiene `schema: 1`
+y `round-simulation-v1`. Hay que actualizar la app, las reglas de Firebase y
+Windows .NET 0.3. Los ejecutores antiguos, incluido Python, rechazan el modo v2.
+La ejecución sigue esperando los cinco minutos previos a un partido futuro;
+no se simulan entradas retroactivas ni se reproducen partidos ya terminados.
 
 ## Usuarios autorizados
 
@@ -135,11 +157,11 @@ escribir su propio canal de ensayo: no sustituyen un backend de órdenes reales.
 
 ## Validación
 
-- Pruebas del motor/autorización Dart y del calendario automático superadas con el SDK independiente y
+- 49 pruebas del motor/autorización Dart y del calendario automático superadas con el SDK independiente y
   el paquete `test`; análisis estático de esos módulos sin incidencias.
 - Pruebas Python de progresión, fallos de red, reinicios, traslado entre PCs,
   revocación, proveedor y límites. Ejecución: ver README de Windows.
-- 35 comprobaciones de reglas superadas contra un emulador local Firestore:
+- 45 comprobaciones de reglas superadas contra un emulador local Firestore:
   dueño, aislamiento entre cuentas, anónimos, revocación, modo e inmutabilidad.
 - Formato Dart y `git diff --check` comprobados.
 

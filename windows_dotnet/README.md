@@ -1,4 +1,4 @@
-# Apuesta a jornada · C# / .NET para Windows
+# Apuesta a jornada · C# / .NET para Windows · 0.3
 
 Aplicación WPF en C# con .NET 10. Sustituye al programa Python conservando el
 protocolo de la app Flutter y las reglas de Firebase. **Solo simulación**: no
@@ -33,11 +33,38 @@ de bloqueo para impedir dos procesos locales con la misma cuenta. Entre PCs, las
 escrituras condicionadas de Firestore mantienen un lease de 60 segundos. Para
 cambiar de Python a .NET, espera un minuto desde la última señal del otro programa.
 
+## Arrancar con la jornada a medias
+
+Actualiza los tres componentes: app Flutter, ejecutable Windows 0.3 y reglas de
+`firestore.rules`. El paquete incluye las reglas para publicarlas en Firebase;
+no se despliegan al abrir el programa. La versión Python y los ejecutables .NET
+anteriores no admiten este nuevo modo y rechazan sus autorizaciones.
+
+1. Elige una jornada que todavía tenga partidos futuros. Si hay un ensayo anterior,
+   revócalo y espera a que el PC confirme «revocado» o «detenido».
+2. Activa **Empezar desde ahora · jornada a medias** en el móvil y elige los
+   encuentros futuros, uno por grupo solapado.
+3. Revisa el diálogo: muestra los partidos ya finalizados y sus marcadores.
+   Esos partidos quedan fuera de la nueva serie, aunque ya hubiera un empate.
+4. Da un nuevo OK. La serie arranca en **1 €**, con historial independiente.
+   El siguiente empate final fuera de esa lista detiene la serie, incluso
+   si ocurre en un encuentro no elegido. Nunca se reinicia automáticamente.
+
+El gasto de los ensayos anteriores de la misma jornada sigue contando para el
+presupuesto total; reiniciar a 1 € no borra ese gasto. Los historiales se conservan.
+Si cambia la lista de finales durante la confirmación, se exige revisar otro OK.
+No se entra en partidos empezados: si hay uno sin final confirmado se espera.
+El ensayo continúa registrando solo en los cinco minutos previos al siguiente
+partido elegido. Esta opción no reproduce partidos pasados ni adelanta el reloj.
+Un empate anterior no demuestra que vaya a llegar otro.
+
 ## Comportamiento y almacenamiento
 
-- 1 € por jornada; 2, 4, 8… tras derrota final confirmada. Máximo 256 € por ensayo
+- 1 € al comenzar cada serie; 2, 4, 8… tras derrota final confirmada. Máximo 256 € por ensayo
   y presupuesto acumulado autorizado. La siguiente jornada requiere otro OK.
-- Cualquier empate final de la jornada detiene la serie, aunque no se eligiera.
+- Modo original: cualquier empate final de la jornada detiene la serie, aunque
+  no se eligiera. Modo desde ahora: se excluyen solo los partidos ya finalizados
+  y confirmados al dar ese nuevo OK.
 - Horarios y resultados se contrastan con TheSportsDB. Sin diez partidos fiables,
   ante cambios de calendario o resultados sin final explícito, no se avanza.
 - Solo se registra durante los cinco minutos previos al encuentro elegido y
@@ -80,7 +107,7 @@ para comprobar compatibilidad entre ambos programas.
 
 ## Validación y límites
 
-Se ha compilado el motor, ejecutado 42 comprobaciones y compilado/publicado el
+Se ha compilado el motor, ejecutado 59 comprobaciones y compilado/publicado el
 proyecto WPF para Windows x64 desde Linux. No se ha ejecutado la interfaz gráfica
 en un Windows real ni probado el circuito con la cuenta Firebase del usuario.
 El ejecutable no lleva firma digital de editor.

@@ -75,11 +75,16 @@ public record Bet(string MatchId, string Label, int Cents, double Odds, DateTime
 public record Authorization(string Scope, List<Fixture> Schedule, HashSet<string> Selected, int Budget,
     double Odds, DateTimeOffset Approved, DateTimeOffset Expires)
 {
+    public bool FromNow { get; init; }
+    public HashSet<string> BaselineFinishedIds { get; init; } = [];
+    public int PreviousSpentCents { get; init; }
     public static Authorization Parse(JsonNode? node)
     {
         var d = J.Object(node);
         var scope = J.Text(d["scope"]);
-        if (J.Text(d["mode"]) != "round-simulation-v1" || !Regex.IsMatch(scope, @"^LaLiga/\d{4}-\d{4}/([1-9]|[12]\d|3[0-8])$"))
+        var mode = J.Text(d["mode"]);
+        var fromNow = mode == "round-simulation-v2";
+        if ((mode != "round-simulation-v1" && !fromNow) || !Regex.IsMatch(scope, @"^LaLiga/\d{4}-\d{4}/([1-9]|[12]\d|3[0-8])$"))
             throw new InvalidDataException("Solo se admite un ensayo de LaLiga válido.");
         var years = scope.Split('/')[1].Split('-');
         if (int.Parse(years[1], CultureInfo.InvariantCulture) != int.Parse(years[0], CultureInfo.InvariantCulture) + 1)
@@ -106,6 +111,20 @@ public record Authorization(string Scope, List<Fixture> Schedule, HashSet<string
         var approved = J.Time(d["approvedAt"]);
         var expires = J.Time(d["expiresAt"]);
         if (expires <= approved) throw new InvalidDataException("Caducidad no válida.");
-        return new(scope, schedule, selected, budget, odds, approved, expires);
+        var baseline = new HashSet<string>(StringComparer.Ordinal);
+        var previousSpent = 0;
+        if (fromNow)
+        {
+            if (J.Text(d["startMode"]) != "from-now" || d["baselineFinishedIds"] is not JsonArray baselineArray) throw new InvalidDataException("Falta el punto de inicio del nuevo ensayo.");
+            var baselineList = baselineArray.Select(J.Text).ToList();
+            baseline = baselineList.ToHashSet(StringComparer.Ordinal);
+            previousSpent = J.Int(d["previousSpentCents"]);
+            if (baseline.Count != baselineList.Count || baseline.Count > 9 || baseline.Any(id => selected.Contains(id) || schedule.All(m => m.Id != id)) ||
+                previousSpent < 0 || previousSpent > 51000 || previousSpent + 100 > budget || schedule.Any(m => baseline.Contains(m.Id) && (m.Kickoff is null || m.Kickoff > approved)))
+                throw new InvalidDataException("Partidos anteriores o gasto acumulado no válidos.");
+        }
+        else if (d.ContainsKey("baselineFinishedIds") || d.ContainsKey("previousSpentCents") || d.ContainsKey("startMode"))
+            throw new InvalidDataException("El inicio a mitad de jornada requiere protocolo v2.");
+        return new(scope, schedule, selected, budget, odds, approved, expires) { FromNow = fromNow, BaselineFinishedIds = baseline, PreviousSpentCents = previousSpent };
     }
 }

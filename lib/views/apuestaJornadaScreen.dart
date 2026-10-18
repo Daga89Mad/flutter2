@@ -39,13 +39,14 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
   late final List<String> _seasons;
   int _round = 1;
   bool _pcMode = true;
+  bool _startFromNow = false;
   RoundPcBridge? _bridge;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _pcSubscription;
   DateTime? _pcSeen;
   String? _pcRemoteId;
   String? _pcRemoteScope;
   Map<String, dynamic> _pcResults = {};
-  bool _pcSyncing = false;
+  Future<void> _pcStateQueue = Future.value();
   bool _calendarVerified = false;
   String? _calendarMessage;
   bool _loading = true;
@@ -153,11 +154,24 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     return override == null ? m : m.withKickoff(override);
   }).toList();
 
-  RoundPlan get _plan => RoundBetting.plan(
-    fixtures: _effectiveFixtures,
-    bets: _rehearsal.bets,
-    now: DateTime.now(),
-  );
+  RoundPlan get _plan {
+    final authorization = _rehearsal.authorization;
+    if (authorization != null)
+      return authorization.next(
+        currentScope: _scope,
+        fixtures: _effectiveFixtures,
+        bets: _rehearsal.bets,
+        now: DateTime.now(),
+      );
+    final fixtures = _startFromNow
+        ? _effectiveFixtures.where((m) => !m.hasResult).toList()
+        : _effectiveFixtures;
+    return RoundBetting.plan(
+      fixtures: fixtures,
+      bets: _startFromNow ? [] : _rehearsal.bets,
+      now: DateTime.now(),
+    );
+  }
 
   Future<void> _load() async {
     final generation = ++_generation;
@@ -188,6 +202,9 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
       _store = store;
       _uid = uid;
       _rehearsal = rehearsal;
+      _startFromNow =
+          rehearsal.authorization?.fromNow ??
+          (rehearsal.archives.isNotEmpty || rehearsal.carriedSpentCents > 0);
       _bridge = RoundPcBridge(uid);
       _pcMode =
           rehearsal.pcRequestId != null || rehearsal.authorization == null;
@@ -204,13 +221,27 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
             remote!['authorization'] as Map,
           );
           final recovered = RoundAuthorization.fromJson(rawAuth);
+          final changedSession = rehearsal.pcRequestId != remote['requestId'];
           _rehearsal = RoundRehearsal(
-            bets: rehearsal.bets,
+            archives: changedSession && recovered.fromNow
+                ? rehearsal.archiveCurrent(DateTime.now())
+                : rehearsal.archives,
+            carriedSpentCents: recovered.previousSpentCents,
+            bets: changedSession
+                ? (remote['initialBets'] as List)
+                      .map(
+                        (b) => RehearsalBet.fromJson(
+                          Map<String, dynamic>.from(b as Map),
+                        ),
+                      )
+                      .toList()
+                : rehearsal.bets,
             kickoffs: rehearsal.kickoffs,
             authorization: remote['action'] == 'authorize' ? recovered : null,
             pcRequestId: remote['requestId'] as String,
           );
           _pcMode = true;
+          _startFromNow = recovered.fromNow;
           await store.save(_rehearsal);
         }
       } catch (e) {
@@ -276,16 +307,23 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     }
   }
 
-  Future<void> _receivePc(Map<String, dynamic>? state, int generation) async {
+  Future<void> _receivePc(Map<String, dynamic>? state, int generation) {
+    return _pcStateQueue = _pcStateQueue.then(
+      (_) => _applyPcState(state, generation),
+    );
+  }
+
+  Future<void> _applyPcState(
+    Map<String, dynamic>? state,
+    int generation,
+  ) async {
     if (!mounted ||
         generation != _generation ||
         state == null ||
-        _pcSyncing ||
         state['mode'] != 'simulation' ||
         state['scope'] != _scope ||
         state['requestId'] != _rehearsal.pcRequestId)
       return;
-    _pcSyncing = true;
     try {
       final bets = (state['bets'] as List)
           .map(
@@ -299,8 +337,23 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
           bets.map((b) => b.matchId).toSet().length != bets.length) {
         throw StateError('Historial del PC incoherente.');
       }
+      if (bets.length < _rehearsal.bets.length) return;
+      for (var i = 0; i < _rehearsal.bets.length; i++) {
+        final old = _rehearsal.bets[i];
+        final incoming = bets[i];
+        if (old.matchId != incoming.matchId ||
+            old.cents != incoming.cents ||
+            old.odds != incoming.odds ||
+            old.approvedAt != incoming.approvedAt) {
+          throw StateError(
+            'El PC ha devuelto un historial distinto al guardado.',
+          );
+        }
+      }
       final terminal = ['stopped', 'revoked'].contains(state['status']);
       final next = RoundRehearsal(
+        archives: _rehearsal.archives,
+        carriedSpentCents: _rehearsal.carriedSpentCents,
         bets: bets,
         kickoffs: _rehearsal.kickoffs,
         authorization: terminal ? null : _rehearsal.authorization,
@@ -320,8 +373,6 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     } catch (e) {
       if (mounted && generation == _generation)
         setState(() => _status = 'No se pudo leer el estado del PC: $e');
-    } finally {
-      _pcSyncing = false;
     }
   }
 
@@ -370,6 +421,8 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     );
     if (time == null || !mounted) return;
     final next = RoundRehearsal(
+      archives: _rehearsal.archives,
+      carriedSpentCents: _rehearsal.carriedSpentCents,
       bets: _rehearsal.bets,
       kickoffs: {
         ..._rehearsal.kickoffs,
@@ -408,6 +461,16 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
         _choices[group.first.id]!,
   };
 
+  String _restartSummary(RoundAuthorization auth) {
+    if (!auth.fromNow) return '';
+    final excluded = _effectiveFixtures
+        .where((m) => auth.baselineFinishedIds.contains(m.id))
+        .map((m) => '${m.label} (${m.homeGoals}–${m.awayGoals})')
+        .join('\n');
+    return 'NUEVO ENSAYO DESDE AHORA: empieza en 1 €. No reutiliza apuestas anteriores.\n'
+        'Partidos ya finalizados fuera del ensayo:\n${excluded.isEmpty ? "Ninguno" : excluded}\n\n';
+  }
+
   Future<void> _approveRound() async {
     if (_saving || _dialogOpen || _loading || _error != null || _store == null)
       return;
@@ -417,11 +480,52 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
       );
       return;
     }
+    if (!_startFromNow && _rehearsal.archivedSpentCents > 0) {
+      _notify(
+        'Esta jornada tiene ensayos anteriores. Usa «Empezar desde ahora» para conservar el presupuesto acumulado.',
+      );
+      return;
+    }
     if (!_calendarVerified) {
       _notify(
         'Actualiza el calendario automático antes de autorizar la jornada.',
       );
       return;
+    }
+    if (_startFromNow && _rehearsal.pcRequestId != null) {
+      setState(() => _saving = true);
+      final generation = _generation;
+      try {
+        final remote = await _bridge!.current();
+        if (remote?['requestId'] == _rehearsal.pcRequestId) {
+          final state = await _bridge!.terminalState(_rehearsal.pcRequestId!);
+          await _receivePc(state, generation);
+          final confirmed = (state['bets'] as List)
+              .map(
+                (b) =>
+                    RehearsalBet.fromJson(Map<String, dynamic>.from(b as Map)),
+              )
+              .toList();
+          if (_rehearsal.bets.length != confirmed.length ||
+              confirmed.indexed.any((entry) {
+                final local = _rehearsal.bets[entry.$1];
+                final remote = entry.$2;
+                return local.matchId != remote.matchId ||
+                    local.cents != remote.cents ||
+                    local.odds != remote.odds ||
+                    local.approvedAt != remote.approvedAt;
+              }))
+            throw StateError(
+              'No se pudo reconciliar el historial del PC. Actualiza la pantalla.',
+            );
+        }
+      } catch (e) {
+        if (mounted) _notify('$e');
+        return;
+      } finally {
+        if (mounted) setState(() => _saving = false);
+      }
+      if (!mounted || generation != _generation) return;
     }
     final groups = RoundAuthorization.groups(
       _effectiveFixtures,
@@ -443,13 +547,15 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     try {
       draft = RoundAuthorization.issue(
         scope: _scope,
+        fromNow: _startFromNow,
+        previousSpentCents: _startFromNow ? _rehearsal.totalSpentCents : 0,
         fixtures: _effectiveFixtures,
         selectedIds: _selectedFor(groups),
         budgetCents: (budget * 100).round(),
         rehearsalOdds: odds,
         now: DateTime.now(),
       );
-      final spent = _rehearsal.bets.fold<int>(0, (sum, b) => sum + b.cents);
+      final spent = _rehearsal.totalSpentCents;
       if (draft.budgetCents <= spent)
         throw StateError(
           'El presupuesto debe cubrir lo ya simulado y la siguiente apuesta.',
@@ -471,11 +577,12 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
         content: Text(
           'LaLiga · $_season · jornada $_round\n'
                   'Inicio: 1 €. Duplicar tras derrota final. Máximo por apuesta: 256 €.\n'
-                  'Presupuesto total de la jornada: ${_money(draft.budgetCents)}.\n'
+                  'Presupuesto total de la jornada: ${_money(draft.budgetCents)}. Ya simulado: ${_money(_rehearsal.totalSpentCents)}.\n'
+                  '${_restartSummary(draft)}'
                   'Cuota mínima: 2,80. Cuota ficticia del ensayo: ${odds.toStringAsFixed(2)}.\n\n'
                   '${_effectiveFixtures.where((m) => draft.selectedIds.contains(m.id)).map((m) => '${m.label} · ${_date(m.kickoff)}').join('\n')}\n\n'
                   'Este OK permite simular las apuestas elegidas sin más confirmaciones '
-                  'durante esta jornada. Se detiene al confirmar cualquier empate, '
+                  'durante este ensayo. Se detiene ante el siguiente empate no incluido entre los partidos anteriores, '
                   'alcanzar el presupuesto o el límite. La próxima jornada necesita otro OK.\n\n' +
               (usePc
                   ? 'No se enviará dinero real. El PC ejecutará el ensayo con el móvil cerrado. Debe estar conectado, encendido y sin suspensión.'
@@ -514,17 +621,33 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
       // Revalida también horarios, empates y las elecciones tras la lectura fresca.
       final authorization = RoundAuthorization.issue(
         scope: _scope,
+        fromNow: draft.fromNow,
+        previousSpentCents: draft.previousSpentCents,
         fixtures: _effectiveFixtures,
         selectedIds: draft.selectedIds,
         budgetCents: draft.budgetCents,
         rehearsalOdds: draft.rehearsalOdds,
         now: DateTime.now(),
       );
+      if (authorization.baselineFinishedIds.length !=
+              draft.baselineFinishedIds.length ||
+          !authorization.baselineFinishedIds.containsAll(
+            draft.baselineFinishedIds,
+          )) {
+        throw StateError(
+          'Cambió un resultado mientras confirmabas. Revisa qué partidos quedarán fuera y da otro OK.',
+        );
+      }
+      final sessionBets = draft.fromNow ? <RehearsalBet>[] : _rehearsal.bets;
       final requestId = usePc
-          ? await _bridge!.publish(authorization, _rehearsal.bets)
+          ? await _bridge!.publish(authorization, sessionBets)
           : null;
       final next = RoundRehearsal(
-        bets: _rehearsal.bets,
+        archives: draft.fromNow
+            ? _rehearsal.archiveCurrent(DateTime.now())
+            : _rehearsal.archives,
+        carriedSpentCents: draft.previousSpentCents,
+        bets: sessionBets,
         kickoffs: usePc ? {} : _rehearsal.kickoffs,
         authorization: authorization,
         pcRequestId: requestId,
@@ -535,6 +658,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
         _pcRemoteId = requestId;
         _pcRemoteScope = _scope;
         _pcSeen = null;
+        _pcResults = {};
       }
       await _store!.save(next);
       if (mounted)
@@ -562,6 +686,8 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
       _pcRemoteId = null;
     }
     final next = RoundRehearsal(
+      archives: _rehearsal.archives,
+      carriedSpentCents: _rehearsal.carriedSpentCents,
       bets: _rehearsal.bets,
       kickoffs: _rehearsal.kickoffs,
       pcRequestId: requestId,
@@ -641,6 +767,8 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
       }
       final fixture = plan.candidates.single;
       final next = RoundRehearsal(
+        archives: _rehearsal.archives,
+        carriedSpentCents: _rehearsal.carriedSpentCents,
         kickoffs: _rehearsal.kickoffs,
         authorization: authorization,
         bets: [
@@ -679,7 +807,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     final busy = _loading || _saving || _dialogOpen;
     final locked = busy || authorization != null;
     final byId = {for (final m in _fixtures) m.id: m};
-    final spent = _rehearsal.bets.fold<int>(0, (sum, b) => sum + b.cents);
+    final spent = _rehearsal.totalSpentCents;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Apuesta a jornada'),
@@ -765,7 +893,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
           const SizedBox(height: 16),
           const Text(
             '1 € → 2 € → 4 €… máximo 256 €. Cuota mínima 2,80.\n'
-            'Cada jornada empieza en 1 € y necesita su propio OK. Un empate final en cualquier partido detiene la jornada.',
+            'Cada jornada necesita su propio OK. El modo «desde ahora» permite otro ensayo desde 1 €, excluyendo los partidos ya finalizados y conservando el gasto acumulado.',
           ),
           if (_calendarMessage != null)
             Padding(
@@ -793,6 +921,10 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
               Text(
                 'Límite autorizado: ${_money(authorization.budgetCents)} · válido hasta ${_date(authorization.expiresAt)}',
               ),
+              if (authorization.fromNow)
+                Text(
+                  'Inicio desde ahora · ${authorization.baselineFinishedIds.length} partidos ya finalizados fuera del ensayo.',
+                ),
               ..._effectiveFixtures
                   .where((m) => authorization.selectedIds.contains(m.id))
                   .map(
@@ -808,6 +940,19 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
                 label: const Text('Detener jornada y revocar OK'),
               ),
             ] else ...[
+              SwitchListTile(
+                title: const Text('Empezar desde ahora · jornada a medias'),
+                subtitle: const Text(
+                  'Nuevo OK y ensayo desde 1 €. Los partidos ya finalizados no cuentan para la parada. El próximo empate detiene el ensayo. Se conserva el gasto acumulado.',
+                ),
+                value: _startFromNow,
+                onChanged: locked
+                    ? null
+                    : (value) => setState(() {
+                        _startFromNow = value;
+                        _choices.clear();
+                      }),
+              ),
               SwitchListTile(
                 title: const Text('Ejecutar ensayo en mi PC Windows'),
                 subtitle: const Text(
@@ -922,6 +1067,31 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
               'Historial de simulación de esta jornada',
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            if (_rehearsal.archives.isNotEmpty) ...[
+              Text(
+                'Ensayos anteriores conservados · ${_money(_rehearsal.archivedSpentCents)} simulados',
+              ),
+              ..._rehearsal.archives.indexed.map(
+                (entry) => ExpansionTile(
+                  title: Text(
+                    'Ensayo anterior ${entry.$1 + 1} · ${_date(entry.$2.endedAt)}',
+                  ),
+                  subtitle: Text(
+                    '${entry.$2.bets.length} apuestas · ${_money(entry.$2.spentCents)}',
+                  ),
+                  children: entry.$2.bets
+                      .map(
+                        (b) => ListTile(
+                          title: Text(b.label),
+                          subtitle: Text(
+                            '${_money(b.cents)} · cuota ficticia ${b.odds.toStringAsFixed(2)}',
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ],
             if (_rehearsal.bets.isEmpty)
               const Text('Todavía no se ha simulado ninguna apuesta.'),
             ..._rehearsal.bets.map((b) {

@@ -4,6 +4,9 @@ import 'roundBetting.dart';
 
 /// Consentimiento de ensayo para una sola jornada; no es una orden de dinero real.
 class RoundAuthorization {
+  final bool fromNow;
+  final Set<String> baselineFinishedIds;
+  final int previousSpentCents;
   final String scope;
   final String schedule;
   final Set<String> selectedIds;
@@ -14,13 +17,17 @@ class RoundAuthorization {
 
   RoundAuthorization._({
     required this.scope,
+    this.fromNow = false,
+    Set<String> baselineFinishedIds = const {},
+    this.previousSpentCents = 0,
     required this.schedule,
     required Set<String> selectedIds,
     required this.budgetCents,
     required this.rehearsalOdds,
     required this.approvedAt,
     required this.expiresAt,
-  }) : selectedIds = Set.unmodifiable(selectedIds);
+  }) : selectedIds = Set.unmodifiable(selectedIds),
+       baselineFinishedIds = Set.unmodifiable(baselineFinishedIds);
 
   static String fingerprint(List<RoundFixture> fixtures) {
     final sorted = [...fixtures]..sort((a, b) => a.id.compareTo(b.id));
@@ -78,13 +85,36 @@ class RoundAuthorization {
     required int budgetCents,
     required double rehearsalOdds,
     required DateTime now,
+    bool fromNow = false,
+    int previousSpentCents = 0,
   }) {
     if (fixtures.length != 10 ||
         fixtures.map((m) => m.id).toSet().length != 10) {
       throw StateError('Carga los diez partidos de LaLiga antes de autorizar.');
     }
-    if (fixtures.any((m) => m.draw))
+    if (!fromNow && fixtures.any((m) => m.draw))
       throw StateError('La jornada ya tiene un empate final.');
+    final baseline = fromNow
+        ? fixtures.where((m) => m.hasResult).map((m) => m.id).toSet()
+        : <String>{};
+    if (fromNow &&
+        fixtures.any(
+          (m) =>
+              baseline.contains(m.id) &&
+              (m.kickoff == null || m.kickoff!.isAfter(now)),
+        )) {
+      throw StateError(
+        'Un resultado anterior tiene un horario incoherente. Actualiza el calendario.',
+      );
+    }
+    if (previousSpentCents < 0 ||
+        previousSpentCents > 51000 ||
+        (!fromNow && previousSpentCents != 0) ||
+        previousSpentCents + 100 > budgetCents) {
+      throw StateError(
+        'El presupuesto de la jornada debe cubrir lo ya simulado y el nuevo ensayo de 1 €.',
+      );
+    }
     final remaining = fixtures
         .where((m) => !m.hasResult && !m.unavailable)
         .toList();
@@ -118,6 +148,9 @@ class RoundAuthorization {
         .reduce((a, b) => a.isAfter(b) ? a : b);
     return RoundAuthorization._(
       scope: scope,
+      fromNow: fromNow,
+      baselineFinishedIds: baseline,
+      previousSpentCents: previousSpentCents,
       schedule: fingerprint(fixtures),
       selectedIds: selectedIds,
       budgetCents: budgetCents,
@@ -128,7 +161,12 @@ class RoundAuthorization {
   }
 
   Map<String, dynamic> toJson() => {
-    'mode': 'round-simulation-v1',
+    'mode': fromNow ? 'round-simulation-v2' : 'round-simulation-v1',
+    if (fromNow) ...{
+      'startMode': 'from-now',
+      'baselineFinishedIds': baselineFinishedIds.toList(),
+      'previousSpentCents': previousSpentCents,
+    },
     'scope': scope,
     'schedule': schedule,
     'selectedIds': selectedIds.toList(),
@@ -144,7 +182,36 @@ class RoundAuthorization {
     final ids = (data['selectedIds'] as List).cast<String>().toSet();
     final approved = DateTime.parse(data['approvedAt'] as String);
     final expires = DateTime.parse(data['expiresAt'] as String);
-    if (data['mode'] != 'round-simulation-v1' ||
+    final fromNow = data['mode'] == 'round-simulation-v2';
+    final baselineList = fromNow
+        ? (data['baselineFinishedIds'] as List).cast<String>()
+        : <String>[];
+    final baseline = baselineList.toSet();
+    final previousSpent = fromNow ? data['previousSpentCents'] as int : 0;
+    final rows = jsonDecode(data['schedule'] as String) as List;
+    final allIds = rows.map((r) => (r as List).first as String).toSet();
+    if ((data['mode'] != 'round-simulation-v1' && !fromNow) ||
+        (!fromNow &&
+            [
+              'startMode',
+              'baselineFinishedIds',
+              'previousSpentCents',
+            ].any(data.containsKey)) ||
+        (fromNow &&
+            (data['startMode'] != 'from-now' ||
+                baseline.length != baselineList.length ||
+                baseline.length > 9 ||
+                !allIds.containsAll(baseline) ||
+                baseline.intersection(ids).isNotEmpty ||
+                previousSpent < 0 ||
+                previousSpent > 51000 ||
+                previousSpent + 100 > budget ||
+                rows.any(
+                  (r) =>
+                      baseline.contains(r[0]) &&
+                      (r[3] == null ||
+                          DateTime.parse(r[3] as String).isAfter(approved)),
+                ))) ||
         budget < 100 ||
         budget > 51100 ||
         !odds.isFinite ||
@@ -154,6 +221,9 @@ class RoundAuthorization {
       throw const FormatException('Autorización de ensayo inválida.');
     return RoundAuthorization._(
       scope: data['scope'] as String,
+      fromNow: fromNow,
+      baselineFinishedIds: baseline,
+      previousSpentCents: previousSpent,
       schedule: data['schedule'] as String,
       selectedIds: ids,
       budgetCents: budget,
@@ -169,7 +239,9 @@ class RoundAuthorization {
     required List<RehearsalBet> bets,
     required DateTime now,
   }) {
-    if (currentScope != scope || !now.isBefore(expiresAt)) {
+    if (currentScope != scope ||
+        now.isBefore(approvedAt) ||
+        !now.isBefore(expiresAt)) {
       return const RoundPlan(
         'Autorización caducada o de otra jornada.',
         stopped: true,
@@ -184,10 +256,30 @@ class RoundAuthorization {
     if (bets.any((b) => b.approvedAt.isAfter(now))) {
       return const RoundPlan('Revisa el reloj y el historial de simulación.');
     }
-    final plan = RoundBetting.plan(fixtures: fixtures, bets: bets, now: now);
+    if (baselineFinishedIds.any(
+      (id) => !fixtures.any((m) => m.id == id && m.hasResult),
+    )) {
+      return const RoundPlan(
+        'Un resultado previo dejó de estar confirmado. Actualiza y revisa el ensayo.',
+        stopped: true,
+      );
+    }
+    if (bets.any((b) => baselineFinishedIds.contains(b.matchId))) {
+      return const RoundPlan(
+        'El historial incluye un partido anterior al nuevo OK.',
+        stopped: true,
+      );
+    }
+    final plan = RoundBetting.plan(
+      fixtures: fixtures
+          .where((m) => !baselineFinishedIds.contains(m.id))
+          .toList(),
+      bets: bets,
+      now: now,
+    );
     if (!plan.canPrepare) return plan;
     final spent = bets.fold<int>(0, (sum, b) => sum + b.cents);
-    if (spent + plan.cents > budgetCents) {
+    if (previousSpentCents + spent + plan.cents > budgetCents) {
       return const RoundPlan(
         'Presupuesto de jornada alcanzado. No se aumenta automáticamente.',
         stopped: true,
