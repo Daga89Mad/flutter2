@@ -42,9 +42,12 @@ permitida una revocación válida de comandos propios tras perder el permiso.
 
 ## Flujo implementado
 
-1. Cargar los diez partidos con sus horarios; sin calendario completo se bloquea
-   la autorización. Para documentos antiguos, reimportar o completar horarios de
-   ensayo. No se permite autorizar con partidos iniciados sin final confirmado.
+1. Al abrir la pantalla, cambiar temporada/jornada o pulsar Actualizar, se
+   consultan automáticamente los diez partidos y sus horarios de TheSportsDB.
+   No hay que entrar antes en «Cargar resultados». Se conserva el ID de cada
+   documento existente y se escribe el calendario en un lote. Sin calendario
+   completo o sin horarios confirmados se bloquea la autorización. No se permite
+   autorizar con partidos iniciados sin final confirmado.
 2. Elegir exactamente un partido de cada grupo de horarios solapados. Los grupos
    con varias opciones nunca se eligen automáticamente. Los intervalos de 120
    minutos se usan solo para agrupar posibles solapes, no como prueba de final.
@@ -106,7 +109,14 @@ Las reglas compartidas de `firestore.rules`, versión 2, permiten estos campos e
 las rutas de resultados mediante su bloque general para usuarios autenticados.
 Esto no acredita cuáles están desplegadas actualmente en Firebase ni convierte
 esos datos editables por clientes en una fuente fiable para dinero real.
-Los horarios de ensayo opcionales se guardan localmente; no alteran el original.
+Los ajustes manuales de horario quedan disponibles solo en el ensayo local.
+En modo PC se muestran y autorizan los horarios automáticos, sin aplicar ajustes
+locales anteriores. Al autorizar ese modo se eliminan esos ajustes de la sesión.
+Los resultados de la carga automática solo incluyen goles cuando hay final
+explícito; no se publica un 0-0 en directo como marcador final. Si el proveedor
+no confirma un final ya guardado, se rechaza el lote completo. Los calendarios
+incompletos, los partidos duplicados o ajenos y los conflictos de IDs se bloquean.
+Un error de carga impide un nuevo OK hasta actualizar correctamente el calendario.
 
 ## Ejecución real sin supervisión: pendiente
 
@@ -125,7 +135,7 @@ escribir su propio canal de ensayo: no sustituyen un backend de órdenes reales.
 
 ## Validación
 
-- 23 pruebas del motor/autorización Dart superadas con el SDK independiente y
+- Pruebas del motor/autorización Dart y del calendario automático superadas con el SDK independiente y
   el paquete `test`; análisis estático de esos módulos sin incidencias.
 - Pruebas Python de progresión, fallos de red, reinicios, traslado entre PCs,
   revocación, proveedor y límites. Ejecución: ver README de Windows.

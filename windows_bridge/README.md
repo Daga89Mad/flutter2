@@ -32,8 +32,9 @@ Betfair permite preparar la siguiente integración, pero no la activa por sí so
 4. Abre `windows_bridge/iniciar.cmd`. Inicia sesión con **el mismo correo y
    contraseña de la app móvil**, no con los de Betfair. No compartas contraseñas
    por el chat. La configuración pública de Firebase ya está incluida.
-5. En la app actualizada abre **Apuesta a jornada**, importa los diez partidos de
-   LaLiga y escoge temporada y jornada. Activa **Ejecutar ensayo en mi PC Windows**.
+5. En la app actualizada abre **Apuesta a jornada** y escoge temporada y jornada.
+   Los partidos y horarios de LaLiga se cargan automáticamente. No necesitas
+   importarlos antes en «Cargar resultados». Activa **Ejecutar ensayo en mi PC Windows**.
    Elige uno por cada grupo de partidos solapados, introduce presupuesto y cuota
    ficticia y confirma **OK · autorizar jornada**.
 6. Espera a ver en el móvil la confirmación y la última señal del PC. Entonces

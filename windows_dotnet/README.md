@@ -16,8 +16,11 @@ Manager. No hace falta instalar Python para utilizar el ejecutable distribuido.
    y actualiza la app móvil. Tu UID debe tener `AccesoApuestaJornada/{uid}` con
    `activo: true`. El UID inicial autorizado se crea al abrir la app, como se
    documenta en `docs/apuesta_a_jornada.md`.
-4. En el móvil, abre **Apuesta a jornada**, carga los diez partidos, activa modo PC,
-   escoge los encuentros, presupuesto y cuota ficticia, y confirma el OK.
+4. En la app actualizada, abre **Apuesta a jornada** y selecciona temporada y
+   jornada: los diez partidos y sus horarios se cargan automáticamente. Activa
+   modo PC, escoge encuentros, presupuesto y cuota ficticia, y confirma el OK.
+   Si faltan datos del proveedor, pulsa Actualizar para reintentar; no hace falta
+   introducir los horarios a mano ni entrar en «Cargar resultados».
 5. Espera la confirmación del PC en el móvil antes de cerrarlo. Windows debe seguir
    encendido, conectado a Internet y sin suspensión.
 

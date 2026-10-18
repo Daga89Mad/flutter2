@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:plantillalogin/core/jornadaAccess.dart';
+import 'package:plantillalogin/core/roundCalendarService.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -45,6 +46,8 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
   String? _pcRemoteScope;
   Map<String, dynamic> _pcResults = {};
   bool _pcSyncing = false;
+  bool _calendarVerified = false;
+  String? _calendarMessage;
   bool _loading = true;
   bool _saving = false;
   bool _dialogOpen = false;
@@ -146,7 +149,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
   }
 
   List<RoundFixture> get _effectiveFixtures => _fixtures.map((m) {
-    final override = _rehearsal.kickoffs[m.id];
+    final override = _pcMode ? null : _rehearsal.kickoffs[m.id];
     return override == null ? m : m.withKickoff(override);
   }).toList();
 
@@ -160,6 +163,8 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
     final generation = ++_generation;
     setState(() {
       _loading = true;
+      _calendarVerified = false;
+      _calendarMessage = null;
       _error = null;
       _fixtures = [];
       _store = null;
@@ -222,6 +227,26 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
         _budget.text = (_rehearsal.authorization!.budgetCents / 100)
             .toStringAsFixed(2);
         _odds.text = _rehearsal.authorization!.rehearsalOdds.toStringAsFixed(2);
+      }
+      try {
+        final missing = await RoundCalendarService().sync(
+          matches: _matches,
+          season: _season,
+          round: _round,
+          isCurrent: () =>
+              mounted &&
+              generation == _generation &&
+              FirebaseAuth.instance.currentUser?.uid == uid,
+        );
+        if (!mounted || generation != _generation) return;
+        _calendarVerified = true;
+        _calendarMessage = missing == 0
+            ? 'Partidos y horarios cargados automáticamente. Hora local del dispositivo.'
+            : 'Calendario cargado. El proveedor todavía no confirma $missing horario(s); no se inventan horas.';
+      } catch (e) {
+        if (!mounted || generation != _generation) return;
+        _calendarMessage =
+            'No se pudo confirmar el calendario automático: $e. Pulsa Actualizar para reintentar.';
       }
       _subscription = _matches.snapshots().listen(
         (snap) {
@@ -392,6 +417,12 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
       );
       return;
     }
+    if (!_calendarVerified) {
+      _notify(
+        'Actualiza el calendario automático antes de autorizar la jornada.',
+      );
+      return;
+    }
     final groups = RoundAuthorization.groups(
       _effectiveFixtures,
       DateTime.now(),
@@ -489,17 +520,12 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
         rehearsalOdds: draft.rehearsalOdds,
         now: DateTime.now(),
       );
-      if (usePc && _rehearsal.kickoffs.isNotEmpty) {
-        throw StateError(
-          'El PC verifica los horarios con el proveedor. Usa una jornada sin ajustes manuales.',
-        );
-      }
       final requestId = usePc
           ? await _bridge!.publish(authorization, _rehearsal.bets)
           : null;
       final next = RoundRehearsal(
         bets: _rehearsal.bets,
-        kickoffs: _rehearsal.kickoffs,
+        kickoffs: usePc ? {} : _rehearsal.kickoffs,
         authorization: authorization,
         pcRequestId: requestId,
       );
@@ -567,6 +593,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
   Future<void> _advance() async {
     final authorization = _rehearsal.authorization;
     if (!mounted ||
+        !_calendarVerified ||
         _rehearsal.pcRequestId != null ||
         _loading ||
         _saving ||
@@ -740,6 +767,11 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
             '1 € → 2 € → 4 €… máximo 256 €. Cuota mínima 2,80.\n'
             'Cada jornada empieza en 1 € y necesita su propio OK. Un empate final en cualquier partido detiene la jornada.',
           ),
+          if (_calendarMessage != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(_calendarMessage!),
+            ),
           if (_loading)
             const Padding(
               padding: EdgeInsets.all(20),
@@ -849,7 +881,8 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: busy || plan.stopped || groups.isEmpty
+                onPressed:
+                    busy || !_calendarVerified || plan.stopped || groups.isEmpty
                     ? null
                     : _approveRound,
                 icon: const Icon(Icons.fact_check_outlined),
@@ -863,7 +896,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
             ),
             if (_fixtures.isEmpty)
               const Text(
-                'Usa «Cargar resultados» para importar los diez partidos de esta jornada.',
+                'Los partidos se buscan automáticamente. Si no aparecen, pulsa Actualizar o prueba otra jornada.',
               ),
             ..._effectiveFixtures.map(
               (m) => ListTile(
@@ -875,7 +908,7 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
                       ? 'Aplazado o cancelado'
                       : 'Sin resultado final confirmado'}',
                 ),
-                trailing: m.hasResult
+                trailing: m.hasResult || _pcMode
                     ? null
                     : IconButton(
                         icon: const Icon(Icons.edit_calendar),
