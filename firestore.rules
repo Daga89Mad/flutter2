@@ -286,12 +286,60 @@ service cloud.firestore {
       }
     }
 
+    // Piloto REAL: documento único por cuenta, inmutable salvo revocación.
+    function validLivePilot(d) {
+      return d.keys().hasOnly(['schema','mode','requestId','action','scope','matchId','home','away','kickoff','approvedAt','expiresAt','updatedAt','currency','stakeCents','budgetCents','minPrice','maxPrice','betType','selectionId','marketId','eventId','marketConfirmed','schedule','fromNow','baselineFinishedIds'])
+        && d.keys().hasAll(['schema','mode','requestId','action','scope','matchId','home','away','kickoff','approvedAt','expiresAt','updatedAt','currency','stakeCents','budgetCents','minPrice','maxPrice','betType','selectionId','marketId','eventId','marketConfirmed','schedule','fromNow','baselineFinishedIds'])
+        && d.schema == 1 && d.mode == 'live-pilot' && d.currency == 'EUR'
+        && d.requestId is string && d.requestId.matches('^[a-f0-9]{32}$')
+        && d.action in ['authorize','revoke']
+        && d.scope is string && d.scope.matches('^LaLiga/[0-9]{4}-[0-9]{4}/([1-9]|[12][0-9]|3[0-8])$')
+        && d.matchId is string && d.matchId.size() > 0 && d.matchId.size() <= 200
+        && d.home is string && d.home.size() > 0 && d.home.size() <= 200
+        && d.away is string && d.away.size() > 0 && d.away.size() <= 200
+        && d.stakeCents == 100 && d.budgetCents == 100 && d.minPrice == 2.8 && d.maxPrice == 20
+        && d.betType == 'BACK' && d.selectionId == '58805'
+        && d.marketId is string && d.marketId.matches('^1[.][0-9]{6,12}$')
+        && d.eventId is string && d.eventId.matches('^[1-9][0-9]{3,15}$')
+        && d.marketConfirmed == true && d.fromNow is bool
+        && d.baselineFinishedIds is list && d.baselineFinishedIds.size() <= 9
+        && d.baselineFinishedIds.toSet().size() == d.baselineFinishedIds.size()
+        && !(d.matchId in d.baselineFinishedIds)
+        && (d.fromNow || d.baselineFinishedIds.size() == 0)
+        && d.schedule is string && d.schedule.size() > 0 && d.schedule.size() < 20000
+        && d.kickoff is timestamp && d.approvedAt is timestamp && d.expiresAt is timestamp
+        && d.approvedAt < d.expiresAt && d.expiresAt == d.kickoff - duration.value(60,'s')
+        && d.updatedAt == request.time;
+    }
+    match /PuenteJornadaReal/{uid} {
+      allow read: if isOwner(uid) && jornadaAutorizada();
+      allow create: if isOwner(uid) && jornadaAutorizada() && validLivePilot(request.resource.data)
+        && request.resource.data.action == 'authorize' && request.resource.data.approvedAt == request.time
+        && request.resource.data.expiresAt > request.time;
+      allow update: if isOwner(uid) && request.resource.data.action == 'revoke'
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action','updatedAt']);
+      allow delete: if false;
+      match /Estado/actual {
+        allow read: if isOwner(uid) && jornadaAutorizada();
+        allow create, update: if isOwner(uid) && jornadaAutorizada()
+          && request.resource.data.keys().hasOnly(['mode','agentId','lastSeenAt','leaseUntil','requestId','status','message','dispatchReserved','fingerprint'])
+          && request.resource.data.mode == 'live-pilot'
+          && request.resource.data.agentId is string && request.resource.data.agentId.size() <= 100
+          && request.resource.data.lastSeenAt is timestamp && request.resource.data.leaseUntil is timestamp
+          && request.resource.data.dispatchReserved is bool
+          && (!exists(/databases/$(database)/documents/PuenteJornadaReal/$(uid)/Estado/actual)
+            || !resource.data.dispatchReserved || request.resource.data.dispatchReserved == true);
+        allow delete: if false;
+      }
+    }
+
     // RESTO: mismo comportamiento de tu aplicación actual.
     match /{collection}/{rest=**} {
-      allow read: if signedIn() && !(collection in ['PuenteJornada', 'AccesoApuestaJornada']);
+      allow read: if signedIn() && !(collection in ['PuenteJornada', 'PuenteJornadaReal', 'AccesoApuestaJornada']);
       allow write: if signedIn()
         && !(collection in [
-          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada', 'AccesoApuestaJornada'
+          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada', 'PuenteJornadaReal', 'AccesoApuestaJornada'
         ]);
     }
   }

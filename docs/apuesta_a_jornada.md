@@ -1,5 +1,21 @@
 # Apuesta a jornada: autorización de jornada completa
 
+## Novedad 0.4: primer envío REAL independiente
+
+La pantalla incluye **Prueba REAL con BF Bot Manager · máximo 1 €**. Permite
+seleccionar un partido futuro de la jornada (también empezada), revisar sus IDs
+de Betfair y confirmar un nuevo OK REAL. Windows publica un CSV local para BF Bot
+Manager. Solo hay una orden BACK al empate de 1 € por cuenta; no hay progresión
+real automática ni reinicio. Se usa el canal separado `PuenteJornadaReal/{uid}`;
+los OK de simulación nunca se convierten en autorizaciones reales.
+
+Actualiza la app, Windows y las reglas. Sigue la instalación y los límites en
+[Windows .NET 0.4](../windows_dotnet/README.md#preparar-la-primera-orden-real).
+El estado del puente indica reserva/publicación del CSV, no aceptación ni
+liquidación en Betfair. Es necesario verificar el retorno de BF Bot Manager
+antes de implementar la siguiente apuesta de la jornada. Las secciones que
+siguen describen el flujo de **simulación** existente.
+
 ## Alcance de esta fase
 
 El menú abre `ApuestaJornadaScreen`, que lee LaLiga del Firestore existente,

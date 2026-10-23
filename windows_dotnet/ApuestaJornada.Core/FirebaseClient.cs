@@ -26,7 +26,8 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
     private string? token, refresh;
     private DateTimeOffset expires;
     public string Uid { get; private set; } = "";
-    public string CommandPath => $"PuenteJornada/{Uid}";
+    public bool UseLivePilot { get; set; }
+    public string CommandPath => UseLivePilot ? $"PuenteJornadaReal/{Uid}" : $"PuenteJornada/{Uid}";
     public string StatePath => CommandPath + "/Estado/actual";
 
     public static async Task<JsonObject> ResponseAsync(HttpResponseMessage response, CancellationToken ct)
@@ -107,7 +108,7 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
         return fixtures;
     }
     public static JsonObject EncodeFields(JsonObject data) => new(data.Select(p => KeyValuePair.Create<string, JsonNode?>(p.Key,
-        p.Key is "lastSeenAt" or "leaseUntil" ? new JsonObject { ["timestampValue"] = J.Text(p.Value) } : Encode(p.Value))));
+        p.Key is "lastSeenAt" or "leaseUntil" or "approvedAt" or "expiresAt" or "kickoff" ? new JsonObject { ["timestampValue"] = J.Text(p.Value) } : Encode(p.Value))));
     public static JsonNode Encode(JsonNode? n)
     {
         if (n is null) return new JsonObject { ["nullValue"] = null };

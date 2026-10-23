@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:plantillalogin/views/apuestaJornadaRealScreen.dart';
+
 import 'package:plantillalogin/core/jornadaAccess.dart';
 import 'package:plantillalogin/core/roundCalendarService.dart';
 
@@ -829,11 +831,36 @@ class _ApuestaJornadaState extends State<_ApuestaJornadaContent> {
                 'SIMULACIÓN · Un OK por jornada\n'
                 'Después del OK se simula la secuencia elegida sin más confirmaciones. '
                 'No se envía dinero real. En modo PC puedes cerrar el móvil después de recibir su confirmación. '
-                'Windows debe permanecer conectado y sin suspensión. BF Bot Manager todavía no recibe órdenes.',
+                'Windows debe permanecer conectado y sin suspensión. Para una orden real usa el botón independiente de prueba REAL.',
               ),
             ),
           ),
           const SizedBox(height: 12),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.euro),
+            label: const Text('Prueba REAL con BF Bot Manager · máximo 1 €'),
+            onPressed: busy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ApuestaJornadaRealScreen(
+                        scope: _scope,
+                        refresh: () async {
+                          await RoundCalendarService().sync(
+                            matches: _matches,
+                            season: _season,
+                            round: _round,
+                            isCurrent: () => mounted,
+                          );
+                          final snap = await _matches.get(
+                            const GetOptions(source: Source.server),
+                          );
+                          return snap.docs.map(_fixture).toList();
+                        },
+                      ),
+                    ),
+                  ),
+          ),
           Row(
             children: [
               Expanded(

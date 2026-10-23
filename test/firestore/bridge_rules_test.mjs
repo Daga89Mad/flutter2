@@ -60,6 +60,34 @@ try {
  }
  await no(setDoc(doc(owner,'PuenteJornada/owner'),{...v2,requestId:'c'.repeat(32),initialBets:[{mode:'simulation',cents:100}]}));
  await ok(setDoc(doc(owner,'PuenteJornada/owner'),command));
+ const live = {schema:1,mode:'live-pilot',currency:'EUR',requestId:'d'.repeat(32),action:'authorize',scope:command.scope,
+   matchId:'one',home:'A',away:'B',kickoff:Timestamp.fromMillis(Date.now()+3600000),approvedAt:serverTimestamp(),
+   expiresAt:Timestamp.fromMillis(Date.now()+3540000),updatedAt:serverTimestamp(),stakeCents:100,budgetCents:100,minPrice:2.8,maxPrice:20,
+   betType:'BACK',selectionId:'58805',marketId:'1.263700796',eventId:'36180903',marketConfirmed:true,schedule:'[]',fromNow:false,baselineFinishedIds:[]};
+ // Derivar ambos timestamps del mismo instante: la igualdad debe ser exacta.
+ live.expiresAt=Timestamp.fromMillis(live.kickoff.toMillis()-60000);
+ const realRef=doc(owner,'PuenteJornadaReal/owner');
+ await no(setDoc(doc(other,'PuenteJornadaReal/other'),live));
+ await no(setDoc(doc(anon,'PuenteJornadaReal/owner'),live));
+ for(const extra of [{mode:'simulation'},{stakeCents:200},{budgetCents:200},{betType:'LAY'},{marketConfirmed:false},{marketId:'1.bad'},{baselineFinishedIds:['one']}]) await no(setDoc(realRef,{...live,...extra}));
+ await ok(setDoc(realRef,live));
+ await ok(getDoc(realRef));
+ await no(getDoc(doc(other,'PuenteJornadaReal/owner')));
+ await no(getDocs(collection(owner,'PuenteJornadaReal')));
+ await no(updateDoc(realRef,{requestId:'e'.repeat(32),updatedAt:serverTimestamp()}));
+ await no(updateDoc(realRef,{stakeCents:200,updatedAt:serverTimestamp()}));
+ await no(deleteDoc(realRef));
+ await no(setDoc(doc(owner,'PuenteJornadaReal/owner/Unexpected/doc'),{}));
+ const realStateRef=doc(owner,'PuenteJornadaReal/owner/Estado/actual');
+ const realState={mode:'live-pilot',agentId:'pc',lastSeenAt:Timestamp.now(),leaseUntil:Timestamp.now(),requestId:live.requestId,dispatchReserved:false,status:'waiting',message:'waiting'};
+ await ok(setDoc(realStateRef,realState));
+ await no(setDoc(realStateRef,{...realState,mode:'simulation'}));
+ await ok(updateDoc(realStateRef,{dispatchReserved:true}));
+ await no(updateDoc(realStateRef,{dispatchReserved:false}));
+ await no(deleteDoc(realStateRef));
+ await no(getDoc(doc(other,'PuenteJornadaReal/owner/Estado/actual')));
+ await ok(updateDoc(realRef,{action:'revoke',updatedAt:serverTimestamp()}));
+ await no(updateDoc(realRef,{action:'authorize',updatedAt:serverTimestamp()}));
  await env.withSecurityRulesDisabled(async context => {
    await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
    await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));

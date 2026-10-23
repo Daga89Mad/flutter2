@@ -12,13 +12,29 @@ public partial class MainWindow : Window
     private CancellationTokenSource? cancellation;
     private Task? running;
     private bool closing, canClose;
-    public MainWindow() => InitializeComponent();
+    private bool liveMode;
+    private string strategyFile = "";
+    public MainWindow()
+    {
+        InitializeComponent();
+        var bundled = Path.Combine(AppContext.BaseDirectory, "EmpatesJornada_PruebaReal.gz");
+        if (File.Exists(bundled)) StrategyPath.Text = bundled;
+    }
 
     private async void Connect_Click(object sender, RoutedEventArgs e)
     {
         if (running is { IsCompleted: false }) return;
         var mail = Email.Text.Trim(); var password = Password.Password;
         if (mail.Length == 0 || password.Length == 0) { Status.Text = "Introduce el correo y la contraseña de la app."; return; }
+        liveMode = LiveMode.IsChecked == true;
+        strategyFile = StrategyPath.Text.Trim();
+        if (liveMode)
+        {
+            try { LiveStrategyValidator.Validate(strategyFile); }
+            catch (Exception error) { Status.Text = "Revisa el archivo de estrategia: " + error.Message; return; }
+            if (MessageBox.Show("Modo REAL: el próximo OK REAL del móvil podrá publicar una orden BACK al empate de 1 €. Comprueba que BF Bot Manager usa la cuenta en euros y la estrategia revisada. No se enviará una segunda orden sin reconciliación.", "Activar recepción de OK real", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+        }
+        LiveMode.IsEnabled = StrategyPath.IsEnabled = false;
         cancellation = new(); Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = false; Stop.IsEnabled = true;
         Password.Clear(); Status.Text = "Conectando…";
         running = RunAsync(mail, password, cancellation.Token); password = "";
@@ -26,7 +42,7 @@ public partial class MainWindow : Window
         finally
         {
             cancellation.Dispose(); cancellation = null;
-            Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = true; Stop.IsEnabled = false;
+            Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = LiveMode.IsEnabled = StrategyPath.IsEnabled = true; Stop.IsEnabled = false;
             if (closing) { canClose = true; Close(); }
         }
     }
@@ -34,6 +50,7 @@ public partial class MainWindow : Window
     {
         using var client = new FirebaseClient();
         using var provider = new SportsDbResults();
+        client.UseLivePilot = liveMode;
         try
         {
             await client.SignInAsync(mail, secret, ct); secret = "";
@@ -51,22 +68,32 @@ public partial class MainWindow : Window
                 File.WriteAllText(agentFile, agent);
                 var ledger = new Ledger(Path.Combine(folder, "dotnet-history"));
                 var worker = new BridgeWorker(client, ledger, provider, agent);
+                var liveWorker = new LivePilotWorker(client, provider, agent, Path.Combine(folder, "bfbot-live"), strategyFile);
+                Outbox.Text = "Ruta para la carga automática de tips en BF Bot Manager: " + liveWorker.OutboxPath;
                 Status.Text = "Sesión iniciada. Esperando el OK del móvil…";
                 while (!ct.IsCancellationRequested)
                 {
                     try
                     {
                         // Persistencia y JSON fuera del hilo de la interfaz.
-                        var state = await Task.Run(() => worker.TickAsync(ct), ct);
+                        var state = await Task.Run(() => liveMode ? liveWorker.TickAsync(ct) : worker.TickAsync(ct), ct);
                         Status.Text = J.Text(state["message"]);
-                        Round.Text = J.Optional(state["scope"]) is { Length: > 0 } scope ? $"{scope} · Simulado en este ensayo: {J.Int(state["spentCents"]) / 100.0:0.00} €" : "Sin jornada autorizada.";
                         LastSeen.Text = "Última confirmación: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
-                        History.ItemsSource = Bet.List(state["bets"]).Select(b => new { Match = b.Label, Amount = $"{b.Cents / 100.0:0.00} €", Odds = b.Odds.ToString("0.00") }).ToList();
+                        if (liveMode)
+                        {
+                            Round.Text = "REAL · Una orden máxima de 1 €. Estado: " + J.Optional(state["status"]);
+                            History.ItemsSource = null;
+                        }
+                        else
+                        {
+                            Round.Text = J.Optional(state["scope"]) is { Length: > 0 } scope ? $"{scope} · Simulado en este ensayo: {J.Int(state["spentCents"]) / 100.0:0.00} €" : "Sin jornada autorizada.";
+                            History.ItemsSource = Bet.List(state["bets"]).Select(b => new { Match = b.Label, Amount = $"{b.Cents / 100.0:0.00} €", Odds = b.Odds.ToString("0.00") }).ToList();
+                        }
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                     catch (Exception error)
                     {
-                        Status.Text = "En espera. No se registran nuevos ensayos: " + Friendly(error);
+                        Status.Text = "En espera. No se envían nuevas órdenes: " + Friendly(error);
                         LastSeen.Text = "Sin confirmar un estado nuevo; comprueba conexión y permisos.";
                     }
                     await Task.Delay(TimeSpan.FromSeconds(15), ct);
@@ -75,7 +102,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception error) { Status.Text = "No se pudo conectar: " + Friendly(error); return; }
-        Status.Text = "PC detenido. El OK remoto sigue guardado; revócalo desde el móvil si quieres cancelarlo.";
+        Status.Text = "PC detenido. El OK remoto sigue guardado. Detener este programa no cancela una orden ya importada por BF Bot Manager.";
     }
     private static string Friendly(Exception error) => error switch
     {
