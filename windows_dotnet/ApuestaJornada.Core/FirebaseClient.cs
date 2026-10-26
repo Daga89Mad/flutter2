@@ -136,4 +136,3 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
     }
     public void Dispose() { token = refresh = null; http.Dispose(); }
 }
-

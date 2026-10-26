@@ -144,4 +144,3 @@ public partial class MainWindow : Window
         e.Cancel = true; closing = true; cancellation?.Cancel(); Stop.IsEnabled = false; Status.Text = "Cerrando conexiones…";
     }
 }
-

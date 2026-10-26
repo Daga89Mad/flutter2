@@ -136,4 +136,3 @@ try {
  await no(getDoc(doc(anon,'AccesoApuestaJornada/owner')));
  console.log(`${checks} comprobaciones de reglas superadas.`);
 } finally {await env.cleanup();}
-

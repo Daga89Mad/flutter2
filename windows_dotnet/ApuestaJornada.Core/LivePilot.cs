@@ -141,4 +141,3 @@ public sealed class LivePilotWorker(IBridgeClient client, IResultsProvider provi
         return await Save("exported", "CSV real publicado para BF Bot Manager: BACK empate, 1 €, mínimo 2,80. Enviado NO significa ejecutado. Prueba detenida hasta revisar aceptación, importe y liquidación.");
     }
 }
-

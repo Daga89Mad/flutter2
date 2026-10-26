@@ -128,4 +128,3 @@ public record Authorization(string Scope, List<Fixture> Schedule, HashSet<string
         return new(scope, schedule, selected, budget, odds, approved, expires) { FromNow = fromNow, BaselineFinishedIds = baseline, PreviousSpentCents = previousSpent };
     }
 }
-

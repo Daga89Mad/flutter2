@@ -12,4 +12,3 @@
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../ApuestaJornada.Core/ApuestaJornada.Core.csproj" /></ItemGroup>
 </Project>
-

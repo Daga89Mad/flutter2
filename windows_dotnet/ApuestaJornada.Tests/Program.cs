@@ -223,4 +223,3 @@ sealed class FakeLiveClient(JsonObject raw, List<Fixture> fixtures) : IBridgeCli
     }
     public Task<List<Fixture>> FixturesAsync(string scope, CancellationToken ct) => Task.FromResult(fixtures);
 }
-

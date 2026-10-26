@@ -39,4 +39,3 @@ public static class Engine
         return new("ready", "Preparada para simular. Ninguna orden real.", next, cents);
     }
 }
-
