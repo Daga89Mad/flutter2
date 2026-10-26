@@ -12,13 +12,22 @@ public partial class MainWindow : Window
     private CancellationTokenSource? cancellation;
     private Task? running;
     private bool closing, canClose;
-    private bool liveMode;
+    private bool liveMode, roundMode, readOnlyRound;
+    private string historyFile = "";
     private string strategyFile = "";
     public MainWindow()
     {
         InitializeComponent();
+        HistoryPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "bfbotmanager.com", "Bf Bot Manager V3", "uk_bets_history.gz");
         var bundled = Path.Combine(AppContext.BaseDirectory, "EmpatesJornada_PruebaReal.gz");
         if (File.Exists(bundled)) StrategyPath.Text = bundled;
+    }
+
+    private void RoundModeChanged(object sender, RoutedEventArgs e)
+    {
+        var name = RoundMode.IsChecked == true ? "EmpatesJornada_Ronda15.gz" : "EmpatesJornada_PruebaReal.gz";
+        var path = Path.Combine(AppContext.BaseDirectory, name);
+        if (StrategyPath is not null && File.Exists(path)) StrategyPath.Text = path;
     }
 
     private async void Connect_Click(object sender, RoutedEventArgs e)
@@ -26,15 +35,25 @@ public partial class MainWindow : Window
         if (running is { IsCompleted: false }) return;
         var mail = Email.Text.Trim(); var password = Password.Password;
         if (mail.Length == 0 || password.Length == 0) { Status.Text = "Introduce el correo y la contraseña de la app."; return; }
+        roundMode = RoundMode.IsChecked == true;
+        readOnlyRound = ReadOnlyMode.IsChecked == true;
+        historyFile = HistoryPath.Text.Trim();
+        if (roundMode && LiveMode.IsChecked == true) { Status.Text = "Selecciona sólo un modo real: piloto o ronda."; return; }
+        if (roundMode && !readOnlyRound && AutoSaveVerified.IsChecked != true) { Status.Text = "Comprueba primero el guardado del historial con BF Bot abierto. Puedes conectar en sólo lectura."; return; }
         liveMode = LiveMode.IsChecked == true;
-        strategyFile = StrategyPath.Text.Trim();
-        if (liveMode)
+        if (roundMode)
         {
-            try { LiveStrategyValidator.Validate(strategyFile); }
-            catch (Exception error) { Status.Text = "Revisa el archivo de estrategia: " + error.Message; return; }
-            if (MessageBox.Show("Modo REAL: el próximo OK REAL del móvil podrá publicar una orden BACK al empate de 1 €. Comprueba que BF Bot Manager usa la cuenta en euros y la estrategia revisada. No se enviará una segunda orden sin reconciliación.", "Activar recepción de OK real", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+            try { BfHistory.Read(historyFile); }
+            catch (Exception error) { Status.Text = "No se puede leer el historial: " + error.Message; return; }
         }
-        LiveMode.IsEnabled = StrategyPath.IsEnabled = false;
+        strategyFile = StrategyPath.Text.Trim();
+        if (liveMode || (roundMode && !readOnlyRound))
+        {
+            try { LiveStrategyValidator.Validate(strategyFile, roundMode); }
+            catch (Exception error) { Status.Text = "Revisa el archivo de estrategia: " + error.Message; return; }
+            if (MessageBox.Show(roundMode ? "Ronda REAL: el OK del móvil permite hasta 4 apuestas de 1, 2, 4 y 8 €, con un total máximo de 15 €. Importa EmpatesJornada_Ronda15.gz, pausa la estrategia antigua y verifica el guardado automático del historial. No se progresa sin liquidación completa." : "Modo REAL: el próximo OK REAL del móvil podrá publicar una orden BACK al empate de 1 €. Comprueba que BF Bot Manager usa la cuenta en euros y la estrategia revisada. No se enviará una segunda orden sin reconciliación.", "Activar recepción de OK real", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+        }
+        RoundMode.IsEnabled = ReadOnlyMode.IsEnabled = HistoryPath.IsEnabled = AutoSaveVerified.IsEnabled = LiveMode.IsEnabled = StrategyPath.IsEnabled = false;
         cancellation = new(); Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = false; Stop.IsEnabled = true;
         Password.Clear(); Status.Text = "Conectando…";
         running = RunAsync(mail, password, cancellation.Token); password = "";
@@ -42,7 +61,7 @@ public partial class MainWindow : Window
         finally
         {
             cancellation.Dispose(); cancellation = null;
-            Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = LiveMode.IsEnabled = StrategyPath.IsEnabled = true; Stop.IsEnabled = false;
+            RoundMode.IsEnabled = ReadOnlyMode.IsEnabled = HistoryPath.IsEnabled = AutoSaveVerified.IsEnabled = Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = LiveMode.IsEnabled = StrategyPath.IsEnabled = true; Stop.IsEnabled = false;
             if (closing) { canClose = true; Close(); }
         }
     }
@@ -50,7 +69,7 @@ public partial class MainWindow : Window
     {
         using var client = new FirebaseClient();
         using var provider = new SportsDbResults();
-        client.UseLivePilot = liveMode;
+        client.UseLivePilot = liveMode; client.UseLiveRound = roundMode;
         try
         {
             await client.SignInAsync(mail, secret, ct); secret = "";
@@ -69,17 +88,24 @@ public partial class MainWindow : Window
                 var ledger = new Ledger(Path.Combine(folder, "dotnet-history"));
                 var worker = new BridgeWorker(client, ledger, provider, agent);
                 var liveWorker = new LivePilotWorker(client, provider, agent, Path.Combine(folder, "bfbot-live"), strategyFile);
-                Outbox.Text = "Ruta para la carga automática de tips en BF Bot Manager: " + liveWorker.OutboxPath;
+                var roundWorker = new LiveRoundWorker(client, provider, agent, Path.Combine(folder, "bfbot-round15"), strategyFile, historyFile, readOnlyRound, $"PuenteJornadaReal/{client.Uid}");
+                Outbox.Text = "Ruta para la carga automática de tips en BF Bot Manager: " + (roundMode ? roundWorker.OutboxPath : liveWorker.OutboxPath);
                 Status.Text = "Sesión iniciada. Esperando el OK del móvil…";
                 while (!ct.IsCancellationRequested)
                 {
                     try
                     {
                         // Persistencia y JSON fuera del hilo de la interfaz.
-                        var state = await Task.Run(() => liveMode ? liveWorker.TickAsync(ct) : worker.TickAsync(ct), ct);
+                        var state = await Task.Run(() => roundMode ? roundWorker.TickAsync(ct) : liveMode ? liveWorker.TickAsync(ct) : worker.TickAsync(ct), ct);
                         Status.Text = J.Text(state["message"]);
                         LastSeen.Text = "Última confirmación: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
-                        if (liveMode)
+                        if (roundMode)
+                        {
+                            Round.Text = $"RONDA REAL · máximo 15 € · Estado: {J.Optional(state["status"])}";
+                            History.ItemsSource = (state["orders"] as JsonArray ?? []).Select(n => J.Object(n)).Select(o => new
+                            { Match = J.Text(o["matchId"]), Amount = $"{J.Int(o["cents"]) / 100.0:0.00} €", Odds = J.Optional(o["status"]) }).ToList();
+                        }
+                        else if (liveMode)
                         {
                             Round.Text = "REAL · Una orden máxima de 1 €. Estado: " + J.Optional(state["status"]);
                             History.ItemsSource = null;
@@ -118,3 +144,4 @@ public partial class MainWindow : Window
         e.Cancel = true; closing = true; cancellation?.Cancel(); Stop.IsEnabled = false; Status.Text = "Cerrando conexiones…";
     }
 }
+

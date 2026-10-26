@@ -27,7 +27,8 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
     private DateTimeOffset expires;
     public string Uid { get; private set; } = "";
     public bool UseLivePilot { get; set; }
-    public string CommandPath => UseLivePilot ? $"PuenteJornadaReal/{Uid}" : $"PuenteJornada/{Uid}";
+    public bool UseLiveRound { get; set; }
+    public string CommandPath => UseLiveRound ? $"PuenteJornadaRondaReal/{Uid}" : UseLivePilot ? $"PuenteJornadaReal/{Uid}" : $"PuenteJornada/{Uid}";
     public string StatePath => CommandPath + "/Estado/actual";
 
     public static async Task<JsonObject> ResponseAsync(HttpResponseMessage response, CancellationToken ct)
@@ -135,3 +136,4 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
     }
     public void Dispose() { token = refresh = null; http.Dispose(); }
 }
+

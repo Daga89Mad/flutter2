@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'apuestaJornadaRondaRealScreen.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -71,7 +73,14 @@ class _RealState extends State<ApuestaJornadaRealScreen> {
               (m.kickoff == null || !m.kickoff!.isAfter(now)),
         ))
       return [];
-    final groups = RoundAuthorization.groups(data, now);
+    final groups = RoundAuthorization.groups(
+      data
+          .where(
+            (m) => !excludedRoundTeam(m.home) && !excludedRoundTeam(m.away),
+          )
+          .toList(),
+      now,
+    );
     return groups.isEmpty
         ? []
         : groups.first
@@ -218,6 +227,21 @@ class _RealState extends State<ApuestaJornadaRealScreen> {
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        FilledButton(
+          onPressed: busy
+              ? null
+              : () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ApuestaJornadaRondaRealScreen(
+                      scope: widget.scope,
+                      refresh: widget.refresh,
+                    ),
+                  ),
+                ),
+          child: const Text('Ronda REAL · 1 → 2 → 4 → 8 € · máximo 15 €'),
+        ),
+        const SizedBox(height: 12),
         const Text(
           'Una sola orden BACK al empate. No activa la martingala real ni convierte los ensayos anteriores.',
           style: TextStyle(fontWeight: FontWeight.bold),

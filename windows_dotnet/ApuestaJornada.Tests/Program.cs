@@ -171,6 +171,7 @@ Check(J.Text((await lostWorker.TickAsync(default))["status"]) == "requires_revie
 lc.Command.Data["action"] = "revoke"; Check(J.Text((await lw.TickAsync(default))["status"]) == "requires_review", "Revocar tras enviar nunca acredita cancelación en Betfair");
 Directory.Delete(liveFolder, true);
 
+checks += await RoundTests.Run();
 Console.WriteLine($"{checks} comprobaciones .NET superadas.");
 
 sealed class FakeProvider : IResultsProvider
@@ -222,3 +223,4 @@ sealed class FakeLiveClient(JsonObject raw, List<Fixture> fixtures) : IBridgeCli
     }
     public Task<List<Fixture>> FixturesAsync(string scope, CancellationToken ct) => Task.FromResult(fixtures);
 }
+

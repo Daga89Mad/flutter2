@@ -88,6 +88,39 @@ try {
  await no(getDoc(doc(other,'PuenteJornadaReal/owner/Estado/actual')));
  await ok(updateDoc(realRef,{action:'revoke',updatedAt:serverTimestamp()}));
  await no(updateDoc(realRef,{action:'authorize',updatedAt:serverTimestamp()}));
+ // Ronda REAL aislada: autorización inmutable y reservas monótonas.
+ const roundRef=doc(owner,'PuenteJornadaRondaReal/owner');
+ const round={schema:1,mode:'live-round-15',requestId:'f'.repeat(32),action:'authorize',scope:'LaLiga/2026-2027/1',
+   approvedAt:serverTimestamp(),updatedAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
+   currency:'EUR',budgetCents:1500,maxBets:4,minPrice:2.8,maxPrice:20,excludeBigThree:true,marketConfirmed:true,fromNow:true,
+   schedule:'[]',legs:'[]',baselineFinishedIds:[]};
+ await no(setDoc(doc(other,'PuenteJornadaRondaReal/other'),round));
+ await no(setDoc(doc(anon,'PuenteJornadaRondaReal/owner'),round));
+ for(const extra of [{mode:'simulation'},{budgetCents:1600},{maxBets:5},{excludeBigThree:false},{currency:'GBP'},{marketConfirmed:false}]) await no(setDoc(roundRef,{...round,...extra}));
+ await ok(setDoc(roundRef,round));
+ await no(getDoc(doc(other,'PuenteJornadaRondaReal/owner')));
+ await no(getDocs(collection(owner,'PuenteJornadaRondaReal')));
+ await no(setDoc(doc(owner,'PuenteJornadaRondaReal/owner/Unexpected/doc'),{}));
+ await no(updateDoc(roundRef,{budgetCents:3100,updatedAt:serverTimestamp()}));
+ await no(deleteDoc(roundRef));
+ const roundState=doc(owner,'PuenteJornadaRondaReal/owner/Estado/actual');
+ const rs={mode:'live-round-15',requestId:round.requestId,fingerprint:'hash',reservedCount:0,orders:[],terminal:false,
+   agentId:'pc',lastSeenAt:Timestamp.now(),leaseUntil:Timestamp.now(),status:'waiting',message:'checking'};
+ await no(setDoc(roundState,{...rs,reservedCount:1,orders:[{}]}));
+ await ok(setDoc(roundState,rs));
+ await no(updateDoc(roundState,{reservedCount:2,orders:[{},{}]}));
+ await ok(updateDoc(roundState,{reservedCount:1,orders:[{cents:100}]}));
+ await no(updateDoc(roundState,{reservedCount:0,orders:[]}));
+ await no(updateDoc(roundState,{fingerprint:'other'}));
+ await no(updateDoc(roundState,{requestId:'a'.repeat(32)}));
+ await no(updateDoc(roundState,{spentCents:1600}));
+ await no(deleteDoc(roundState));
+ await no(getDoc(doc(other,'PuenteJornadaRondaReal/owner/Estado/actual')));
+ await ok(updateDoc(roundState,{terminal:true}));
+ await no(updateDoc(roundState,{terminal:false}));
+ await no(updateDoc(roundState,{reservedCount:2,orders:[{},{}]}));
+ await ok(updateDoc(roundRef,{action:'revoke',updatedAt:serverTimestamp()}));
+ await no(updateDoc(roundRef,{action:'authorize',updatedAt:serverTimestamp()}));
  await env.withSecurityRulesDisabled(async context => {
    await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
    await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));
@@ -103,3 +136,4 @@ try {
  await no(getDoc(doc(anon,'AccesoApuestaJornada/owner')));
  console.log(`${checks} comprobaciones de reglas superadas.`);
 } finally {await env.cleanup();}
+

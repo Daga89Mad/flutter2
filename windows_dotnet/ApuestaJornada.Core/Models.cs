@@ -103,7 +103,7 @@ public record Authorization(string Scope, List<Fixture> Schedule, HashSet<string
             throw new InvalidDataException("Equipos o identificadores duplicados o vacíos.");
         var ids = (d["selectedIds"] as JsonArray ?? throw new InvalidDataException("Faltan las elecciones.")).Select(J.Text).ToList();
         var selected = ids.ToHashSet(StringComparer.Ordinal);
-        if (ids.Count == 0 || ids.Count != selected.Count || selected.Any(id => schedule.All(m => m.Id != id)))
+        if (ids.Count == 0 || ids.Count != selected.Count || selected.Any(id => schedule.All(m => m.Id != id) || schedule.Any(m => m.Id == id && ExcludedTeams.IsExcludedFixture(m))))
             throw new InvalidDataException("Selecciones no válidas.");
         var times = schedule.Where(m => selected.Contains(m.Id)).Select(m => m.Kickoff ?? throw new InvalidDataException("Falta un horario.")).Order().ToList();
         if (times.Zip(times.Skip(1)).Any(pair => pair.Second - pair.First < TimeSpan.FromMinutes(120)))
@@ -128,3 +128,4 @@ public record Authorization(string Scope, List<Fixture> Schedule, HashSet<string
         return new(scope, schedule, selected, budget, odds, approved, expires) { FromNow = fromNow, BaselineFinishedIds = baseline, PreviousSpentCents = previousSpent };
     }
 }
+
