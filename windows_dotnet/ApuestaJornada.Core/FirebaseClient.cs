@@ -28,7 +28,7 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
     public string Uid { get; private set; } = "";
     public bool UseLivePilot { get; set; }
     public bool UseLiveRound { get; set; }
-    public string CommandPath => UseLiveRound ? $"PuenteJornadaRondaReal/{Uid}" : UseLivePilot ? $"PuenteJornadaReal/{Uid}" : $"PuenteJornada/{Uid}";
+    public string CommandPath => UseLiveRound ? $"PuenteJornadaRonda128Real/{Uid}" : UseLivePilot ? $"PuenteJornadaReal/{Uid}" : $"PuenteJornada/{Uid}";
     public string StatePath => CommandPath + "/Estado/actual";
 
     public static async Task<JsonObject> ResponseAsync(HttpResponseMessage response, CancellationToken ct)

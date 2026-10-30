@@ -11,15 +11,15 @@ static class RoundTests
         void Check(bool ok, string label) { if (!ok) throw new Exception("FALLO RONDA: " + label); checks++; Console.WriteLine("OK RONDA " + label); }
         void Reject(Action a, string label) { var rejected = false; try { a(); } catch { rejected = true; } Check(rejected, label); }
         async Task RejectAsync(Func<Task> a, string label) { var rejected = false; try { await a(); } catch { rejected = true; } Check(rejected, label); }
-        var root = Path.Combine(Path.GetTempPath(), "round15-tests-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(Path.GetTempPath(), "round128-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var xml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "live_strategy_reviewed.xml"))
-            .Replace("<Name>Empates por jornada</Name>", "<Name>Empates jornada 15 EUR</Name>")
-            .Replace("<MaxBetLiability>1</MaxBetLiability>", "<MaxBetLiability>8</MaxBetLiability>")
-            .Replace("<ProvidersCSV>EmpatesJornada</ProvidersCSV>", "<ProvidersCSV>EmpatesJornadaRonda</ProvidersCSV>")
+            .Replace("<Name>Empates por jornada</Name>", "<Name>Empates jornada max128 EUR</Name>")
+            .Replace("<MaxBetLiability>1</MaxBetLiability>", "<MaxBetLiability>128</MaxBetLiability>")
+            .Replace("<ProvidersCSV>EmpatesJornada</ProvidersCSV>", "<ProvidersCSV>EmpatesJornadaRonda128</ProvidersCSV>")
             .Replace("<IgnoreTipStake>true</IgnoreTipStake>", "<IgnoreTipStake>false</IgnoreTipStake>");
         var strategy = Path.Combine(root, "round.gz"); WriteGzip(strategy, xml);
-        LiveStrategyValidator.Validate(strategy, true); Check(true, "estrategia CSV variable y responsabilidad máxima 8 EUR");
+        LiveStrategyValidator.Validate(strategy, true); Check(true, "estrategia CSV variable y responsabilidad máxima 128 EUR");
         Reject(() => LiveStrategyValidator.Validate(strategy), "no confunde estrategia de ronda con piloto");
         var start = new DateTimeOffset(2027, 1, 10, 10, 0, 0, TimeSpan.Zero);
         List<Fixture> Fixtures() => Enumerable.Range(0, 10).Select(i => new Fixture(i.ToString(), "Local " + i, "Visitante " + i,
@@ -29,18 +29,25 @@ static class RoundTests
             fs ??= Fixtures();
             return new JsonObject
             {
-                ["schema"] = 1, ["mode"] = "live-round-15", ["requestId"] = new string('c', 32), ["action"] = "authorize",
-                ["scope"] = "LaLiga/2026-2027/20", ["approvedAt"] = J.Iso(start), ["expiresAt"] = J.Iso(fs[3].Kickoff!.Value.AddSeconds(-60)),
-                ["currency"] = "EUR", ["budgetCents"] = 1500, ["maxBets"] = 4, ["minPrice"] = 2.8, ["maxPrice"] = 20,
+                ["schema"] = 1, ["mode"] = "live-round-128-v1", ["requestId"] = new string('c', 32), ["action"] = "authorize",
+                ["scope"] = "LaLiga/2026-2027/20", ["approvedAt"] = J.Iso(start), ["expiresAt"] = J.Iso(fs[7].Kickoff!.Value.AddSeconds(-60)),
+                ["currency"] = "EUR", ["budgetCents"] = 25500, ["maxBets"] = 8, ["maxStakeCents"] = 12800, ["minPrice"] = 2.8, ["maxPrice"] = 20,
                 ["excludeBigThree"] = true, ["marketConfirmed"] = true, ["fromNow"] = true, ["baselineFinishedIds"] = new JsonArray(),
                 ["schedule"] = new JsonArray(fs.OrderBy(f => f.Id, StringComparer.Ordinal).Select(f => (JsonNode)new JsonArray(f.Id, f.Home, f.Away, J.Iso(f.Kickoff!.Value), false)).ToArray()).ToJsonString(),
-                ["legs"] = new JsonArray(fs.Take(4).Select((f, i) => (JsonNode)new JsonArray(f.Id, f.Home, f.Away,
+                ["legs"] = new JsonArray(fs.Take(8).Select((f, i) => (JsonNode)new JsonArray(f.Id, f.Home, f.Away,
                     J.Iso(f.Kickoff!.Value), "1.30000000" + i, "4000000" + i)).ToArray()).ToJsonString()
             };
         }
-        var parsed = LiveRoundCommand.Parse(Raw()); Check(parsed.Legs.Count == 4, "contrato completo de cuatro partidos");
-        foreach (var field in new[] { "budgetCents", "maxBets" })
+        var parsed = LiveRoundCommand.Parse(Raw()); Check(parsed.Legs.Count == 8, "contrato completo de ocho partidos");
+        foreach (var field in new[] { "budgetCents", "maxBets", "maxStakeCents" })
         { var bad = Raw(); bad[field] = 9999; Reject(() => LiveRoundCommand.Parse(bad), "rechaza ampliar " + field); }
+        var oldOk = Raw(); oldOk["mode"] = "live-round-15"; oldOk["budgetCents"] = 1500; oldOk["maxBets"] = 4; oldOk.Remove("maxStakeCents");
+        Reject(() => LiveRoundCommand.Parse(oldOk), "el OK antiguo de 15 EUR no autoriza ampliar el riesgo");
+        Reject(() => LiveRoundCommand.Csv(parsed.Legs[0], 25600), "rechaza CSV de 256 EUR por superar el máximo de 128");
+        Reject(() => LiveRoundCommand.Csv(parsed.Legs[0], 12900), "rechaza importe ajeno a la progresión");
+        Check(LiveRoundCommand.Csv(parsed.Legs[7], 12800).Contains("\"128.00\""), "CSV admite exactamente el último escalón de 128 EUR");
+        WriteGzip(strategy, xml.Replace("<MaxBetLiability>128</MaxBetLiability>", "<MaxBetLiability>129</MaxBetLiability>"));
+        Reject(() => LiveStrategyValidator.Validate(strategy, true), "estrategia con máximo 129 EUR rechazada"); WriteGzip(strategy, xml);
         foreach (var name in new[] { "Real Madrid CF", "FC Barcelona", "Atlético de Madrid", "Club Atlético de Madrid" })
         {
             Check(ExcludedTeams.IsExcluded(name), "normaliza exclusión " + name);
@@ -62,7 +69,7 @@ static class RoundTests
         var ro = new RoundClient(Raw(), Fixtures()); var readWorker = Worker(ro, "read", true);
         Check(J.Text((await readWorker.TickAsync(default))["status"]) == "read_only" && !File.Exists(readWorker.OutboxPath), "modo sólo lectura nunca crea CSV");
         var client = new RoundClient(Raw(), Fixtures()); var worker = Worker(client, "full");
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 8; i++)
         {
             time = start.AddHours(i * 3);
             var state = await worker.TickAsync(default);
@@ -78,10 +85,10 @@ static class RoundTests
             Check(J.Text((await worker.TickAsync(default))["status"]) == "confirming", "espera segunda lectura de liquidación " + i);
             time = time.AddSeconds(16);
             var settled = await worker.TickAsync(default);
-            Check(J.Text(settled["status"]) == (i == 3 ? "completed" : "waiting"), "sólo continúa tras liquidación estable " + i);
+            Check(J.Text(settled["status"]) == (i == 7 ? "completed" : "waiting"), "sólo continúa tras liquidación estable " + i);
         }
-        Check(J.Int(client.State!.Data["spentCents"]) == 1500 && J.Bool(client.State.Data["terminal"]), "límite acumulado 15 EUR y terminal tras cuatro pérdidas");
-        Check(J.Int((await worker.TickAsync(default))["reservedCount"]) == 4, "no existe quinta apuesta ni reinicio el lunes");
+        Check(J.Int(client.State!.Data["spentCents"]) == 25500 && J.Bool(client.State.Data["terminal"]), "límite acumulado 255 EUR y terminal tras ocho pérdidas");
+        Check(J.Int((await worker.TickAsync(default))["reservedCount"]) == 8, "no existe novena apuesta ni reinicio el lunes");
         bets.Clear(); History(); time = start;
         var winning = new RoundClient(Raw(), Fixtures()); var winWorker = Worker(winning, "win"); await winWorker.TickAsync(default);
         time = start.AddHours(2); bets.Add(HistoryBet(0, 1, start, time, 3)); History();
@@ -110,6 +117,17 @@ static class RoundTests
         var simBet = HistoryBet(0, 1, start, start.AddHours(2), -1); simBet.Element("SimulatedBet")!.Value = "true"; bets.Add(simBet); History(); time = start.AddHours(2);
         Check(J.Text((await sw.TickAsync(default))["status"]) == "awaiting_history", "apuesta simulada nunca confirma ejecución real");
         await RejectAsync(() => Worker(simulation, "pc2", agent: "otro").TickAsync(default), "lease bloquea segundo PC");
+        bets.Clear(); History(); time = start;
+        var legacyClient = new RoundClient(Raw(), Fixtures());
+        legacyClient.Extra["PuenteJornadaRondaReal/user"] = new(new JsonObject { ["action"] = "authorize" }, "old-ok");
+        legacyClient.Extra["PuenteJornadaRondaReal/user/Estado/actual"] = new(new JsonObject
+            { ["terminal"] = false, ["reservedCount"] = 0, ["orders"] = new JsonArray() }, "old-state");
+        var legacyWorker = new LiveRoundWorker(legacyClient, new RoundProvider(), "pc", Path.Combine(root,"legacy"), strategy, history,
+            readOnly: false, legacyPilotPath: "PuenteJornadaReal/user", clock: () => time);
+        await RejectAsync(() => legacyWorker.TickAsync(default), "ronda anterior activa bloquea el nuevo límite");
+        Check(!File.Exists(legacyWorker.OutboxPath), "no publica CSV con otra ronda autorizada");
+        legacyClient.Extra["PuenteJornadaRondaReal/user"].Data["action"] = "revoke";
+        Check(J.Text((await legacyWorker.TickAsync(default))["status"]) == "exported", "ronda anterior revocada sin reservas permite el nuevo OK");
         Directory.Delete(root, true);
         return checks;
     }
@@ -118,7 +136,7 @@ static class RoundTests
     { using var f = File.Create(path); using var gz = new GZipStream(f, CompressionLevel.Optimal); using var w = new StreamWriter(gz); w.Write(xml); }
     private static XElement HistoryBet(int i, decimal amount, DateTimeOffset placed, DateTimeOffset settled, decimal profit) => new("BetHistoryItem",
         new XElement("MarketId", "1.30000000" + i), new XElement("SelectionId", "58805"), new XElement("StrategyID", "round-strategy"),
-        new XElement("StrategyName", LiveRoundCommand.Strategy), new XElement("Tipster", "empatesjornadaronda"), new XElement("BetId", "bet" + i),
+        new XElement("StrategyName", LiveRoundCommand.Strategy), new XElement("Tipster", "empatesjornadaronda128"), new XElement("BetId", "bet" + i),
         new XElement("BetType", "BACK"), new XElement("Currency", "EUR"), new XElement("SimulatedBet", false), new XElement("Status", "SETTLED"),
         new XElement("Matched", amount), new XElement("Unmatched", 0), new XElement("AvgPrice", 4), new XElement("ProfitLoss", profit),
         new XElement("PlacedDate", J.Iso(placed)), new XElement("SettledDate", J.Iso(settled)));
@@ -131,12 +149,13 @@ sealed class RoundProvider : IResultsProvider
 sealed class RoundClient(JsonObject raw, List<Fixture> fixtures) : IBridgeClient
 {
     public string CommandPath => "round-command"; public string StatePath => "round-state";
+    public Dictionary<string, Document> Extra = new();
     public Document Command = new(raw, "v1"); public Document? State; public List<Fixture> Fixtures = fixtures;
     private int revision, reads; public bool LoseExportAck; public int RevokeOnRead;
     public Task<Document?> GetAsync(string path, CancellationToken ct)
     {
         if (path == CommandPath && ++reads == RevokeOnRead) { Command.Data["action"] = "revoke"; Command = new(Command.Data, "revoked"); }
-        var d = path == CommandPath ? Command : path == StatePath ? State : null;
+        var d = path == CommandPath ? Command : path == StatePath ? State : Extra.GetValueOrDefault(path);
         return Task.FromResult(d is null ? null : new Document(d.Data.DeepClone().AsObject(), d.Version));
     }
     public Task<string> PatchAsync(string path, JsonObject data, string? expected, bool create, CancellationToken ct)

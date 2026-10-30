@@ -239,7 +239,7 @@ class _RealState extends State<ApuestaJornadaRealScreen> {
                     ),
                   ),
                 ),
-          child: const Text('Ronda REAL · 1 → 2 → 4 → 8 € · máximo 15 €'),
+          child: const Text('Ronda REAL · máximo por apuesta 128 € · total 255 €'),
         ),
         const SizedBox(height: 12),
         const Text(

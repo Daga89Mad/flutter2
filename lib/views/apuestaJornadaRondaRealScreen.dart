@@ -61,7 +61,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
   String? error;
   DocumentReference<Map<String, dynamic>> get command => FirebaseFirestore
       .instance
-      .collection('PuenteJornadaRondaReal')
+      .collection('PuenteJornadaRonda128Real')
       .doc(FirebaseAuth.instance.currentUser!.uid);
 
   @override
@@ -135,8 +135,8 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       );
     }
     final legs = future(data).where((m) => selected.contains(m.id)).toList();
-    if (legs.isEmpty || legs.length != selected.length || legs.length > 4) {
-      throw StateError('Elige entre uno y cuatro partidos futuros.');
+    if (legs.isEmpty || legs.length != selected.length || legs.length > 8) {
+      throw StateError('Elige entre uno y ocho partidos futuros.');
     }
     for (var i = 0; i < legs.length; i++) {
       final m = legs[i];
@@ -198,12 +198,12 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Autorizar ronda REAL · máximo 15 €'),
+          title: const Text('Autorizar ronda REAL · máximo por apuesta 128 € · total 255 €'),
           content: SingleChildScrollView(
             child: Text(
               '${widget.scope}\n\n${legs.asMap().entries.map((e) => '${1 << e.key} € · ${e.value.label}\n${e.value.kickoff!.toLocal()}\nMarketId ${markets[e.value.id]!.text.trim()} · EventId ${events[e.value.id]!.text.trim()}').join('\n\n')}\n\n'
-              'BACK al empate · cuotas 2,80–20. Máximo cuatro apuestas: 1 → 2 → 4 → 8 €. '
-              'Pérdida acumulada máxima: 15 €. Se para al aparecer un nuevo empate final o al ganar. '
+              'BACK al empate · cuotas 2,80–20. Máximo ocho apuestas: 1 → 2 → 4 → 8 → 16 → 32 → 64 → 128 €. '
+              'Máximo por apuesta: 128 €. Pérdida acumulada máxima: 255 €. Se para al aparecer un nuevo empate final o al ganar. '
               'Sólo se duplica tras una derrota completamente liquidada. Si no llega la liquidación a tiempo, se detiene. '
               'Se excluyen Real Madrid, Barcelona y Atlético de Madrid. Los finales ya existentes quedan fuera del nuevo inicio. '
               'El lunes continúa la misma jornada y el mismo presupuesto. Este OK es independiente del piloto de 1 €.',
@@ -216,7 +216,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('OK · autorizar hasta 15 € REALES'),
+              child: const Text('OK · autorizar hasta 255 € REALES'),
             ),
           ],
         ),
@@ -247,6 +247,12 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       await FirebaseFirestore.instance.runTransaction((tx) async {
         final previous = await tx.get(target), simulation = await tx.get(sim);
         final simState = await tx.get(sim.collection('Estado').doc('actual'));
+        final oldRef = FirebaseFirestore.instance.collection('PuenteJornadaRondaReal').doc(uid);
+        final oldRound = await tx.get(oldRef);
+        final oldState = await tx.get(oldRef.collection('Estado').doc('actual'));
+        if (oldRound.exists && oldRound.data()?['action'] != 'revoke' && oldState.data()?['terminal'] != true) {
+          throw StateError('Revoca primero los siguientes envíos de la ronda anterior de 15 €.');
+        }
         if (previous.exists)
           throw StateError(
             'Esta cuenta ya tiene una prueba de ronda. No se reinicia ni se reemplaza.',
@@ -261,7 +267,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         }
         tx.set(target, {
           'schema': 1,
-          'mode': 'live-round-15',
+          'mode': 'live-round-128-v1',
           'requestId': id,
           'action': 'authorize',
           'scope': widget.scope,
@@ -271,8 +277,9 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             legs.last.kickoff!.subtract(const Duration(seconds: 60)).toUtc(),
           ),
           'currency': 'EUR',
-          'budgetCents': 1500,
-          'maxBets': 4,
+          'budgetCents': 25500,
+          'maxStakeCents': 12800,
+          'maxBets': 8,
           'minPrice': 2.8,
           'maxPrice': 20,
           'excludeBigThree': true,
@@ -283,6 +290,19 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           'baselineFinishedIds': baseline.toList(),
         });
       });
+    } catch (e) {
+      if (mounted) setState(() => error = '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> revokePrevious() async {
+    setState(() => busy = true);
+    try {
+      await FirebaseFirestore.instance.collection('PuenteJornadaRondaReal')
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .update({'action': 'revoke', 'updatedAt': FieldValue.serverTimestamp()});
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -306,16 +326,30 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Ronda REAL · límite 15 €')),
+    appBar: AppBar(title: const Text('Ronda REAL · máximo por apuesta 128 € · total 255 €')),
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
         const Text(
-          '1 → 2 → 4 → 8 € · hasta cuatro apuestas. Sin Real Madrid, Barcelona ni Atlético de Madrid.',
+          '1 → 2 → 4 → 8 → 16 → 32 → 64 → 128 € · hasta ocho apuestas. Sin Real Madrid, Barcelona ni Atlético de Madrid.',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const Text(
           'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes.',
+        ),
+        StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance.collection('PuenteJornadaRondaReal')
+              .doc(FirebaseAuth.instance.currentUser!.uid).snapshots(),
+          builder: (context, previous) {
+            if (previous.hasError) return Text('No se pudo consultar la ronda anterior: ${previous.error}');
+            final old = previous.data?.data();
+            if (old == null || old['action'] == 'revoke') return const SizedBox.shrink();
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Existe una autorización anterior de 15 €. El nuevo límite requiere un OK separado. Revocar impide siguientes envíos; no cancela apuestas ya importadas.'),
+              TextButton(onPressed: busy ? null : revokePrevious,
+                child: const Text('Revocar siguientes envíos de la ronda anterior de 15 €')),
+            ]);
+          },
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: command.snapshots(),
@@ -328,7 +362,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Autorización guardada · ${d['scope']} · máximo 15 €'),
+                  Text('Autorización guardada · ${d['scope']} · máximo por apuesta 128 € · total 255 €'),
                   StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                     stream: command
                         .collection('Estado')
@@ -389,7 +423,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                         onChanged: busy
                             ? null
                             : (v) => setState(() {
-                                if (v == true && selected.length < 4) {
+                                if (v == true && selected.length < 8) {
                                   selected.add(m.id);
                                 } else {
                                   selected.remove(m.id);
@@ -431,7 +465,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                   onPressed: busy || !confirmed || selected.isEmpty
                       ? null
                       : authorize,
-                  child: const Text('Revisar OK REAL · máximo 15 €'),
+                  child: const Text('Revisar OK REAL · máximo por apuesta 128 € · total 255 €'),
                 ),
                 TextButton(
                   onPressed: busy ? null : reload,

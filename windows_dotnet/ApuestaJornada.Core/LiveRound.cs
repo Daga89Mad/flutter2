@@ -10,17 +10,17 @@ public sealed record RoundLeg(string MatchId, string Home, string Away, DateTime
 public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Approved, DateTimeOffset Expires,
     string Schedule, HashSet<string> Baseline, List<RoundLeg> Legs, string Fingerprint)
 {
-    public const string Provider = "EmpatesJornadaRonda", Strategy = "Empates jornada 15 EUR";
+    public const string Provider = "EmpatesJornadaRonda128", Strategy = "Empates jornada max128 EUR";
     public static LiveRoundCommand Parse(JsonObject d)
     {
         var scope = J.Text(d["scope"]); var id = J.Text(d["requestId"]);
         var approved = J.Time(d["approvedAt"]); var expires = J.Time(d["expiresAt"]);
-        if (J.Int(d["schema"]) != 1 || J.Text(d["mode"]) != "live-round-15" ||
+        if (J.Int(d["schema"]) != 1 || J.Text(d["mode"]) != "live-round-128-v1" ||
             !Regex.IsMatch(id, "^[a-f0-9]{32}$") || !Regex.IsMatch(scope, @"^LaLiga/\d{4}-\d{4}/([1-9]|[12]\d|3[0-8])$") ||
-            J.Text(d["currency"]) != "EUR" || J.Int(d["budgetCents"]) != 1500 || J.Int(d["maxBets"]) != 4 ||
+            J.Text(d["currency"]) != "EUR" || J.Int(d["budgetCents"]) != 25500 || J.Int(d["maxBets"]) != 8 || J.Int(d["maxStakeCents"]) != 12800 ||
             J.Number(d["minPrice"]) != 2.8 || J.Number(d["maxPrice"]) != 20 ||
             !J.Bool(d["excludeBigThree"]) || !J.Bool(d["marketConfirmed"]) || !J.Bool(d["fromNow"]))
-            throw new InvalidDataException("Falta autorización REAL de hasta 4 órdenes, máximo 15 €.");
+            throw new InvalidDataException("Falta autorización REAL de hasta 8 órdenes, máximo por apuesta 128 € y acumulado 255 €.");
         var rows = JsonNode.Parse(J.Text(d["legs"])) as JsonArray ?? throw new InvalidDataException("Faltan partidos elegidos.");
         var legs = rows.Select(n =>
         {
@@ -28,7 +28,7 @@ public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Ap
             if (r.Count != 6) throw new InvalidDataException("Partido incompleto.");
             return new RoundLeg(J.Text(r[0]), J.Text(r[1]), J.Text(r[2]), J.Time(r[3]), J.Text(r[4]), J.Text(r[5]));
         }).ToList();
-        if (legs.Count is < 1 or > 4 || legs.Select(l => l.MatchId).Distinct().Count() != legs.Count ||
+        if (legs.Count is < 1 or > 8 || legs.Select(l => l.MatchId).Distinct().Count() != legs.Count ||
             legs.Select(l => l.MarketId).Distinct().Count() != legs.Count || legs.Select(l => l.EventId).Distinct().Count() != legs.Count ||
             legs.Any(l => string.IsNullOrWhiteSpace(l.MatchId) || string.IsNullOrWhiteSpace(l.Home) || string.IsNullOrWhiteSpace(l.Away) ||
                 ExcludedTeams.IsExcludedFixture(l.Home, l.Away) || !Regex.IsMatch(l.MarketId, @"^1\.\d{6,12}$") ||
@@ -66,16 +66,20 @@ public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Ap
             throw new InvalidDataException("Cambió el calendario o no coincide con los partidos autorizados. Prueba detenida.");
     }
 
-    public static string Csv(RoundLeg l, int cents) =>
+    public static string Csv(RoundLeg l, int cents)
+    {
+        if (!Enumerable.Range(0, 8).Any(i => cents == (100 << i))) throw new InvalidDataException("Importe fuera de la progresión hasta 128 €.");
+        return
         "\"Provider\",\"EventId\",\"MarketId\",\"SelectionId\",\"MarketType\",\"Handicap\",\"BetType\",\"Size\",\"Price\",\"MinPrice\",\"MaxPrice\"\r\n" +
         $"\"{Provider}\",\"{l.EventId}\",\"{l.MarketId}\",\"58805\",\"MATCH_ODDS\",\"0\",\"BACK\",\"{(cents / 100m).ToString("0.00", CultureInfo.InvariantCulture)}\",\"2.80\",\"2.80\",\"20.00\"\r\n";
+    }
 }
 
 public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provider, string agentId, string folder,
     string strategyPath, string historyPath, bool readOnly = true, string? legacyPilotPath = null, Func<DateTimeOffset>? clock = null)
 {
     private DateTimeOffset Now => clock?.Invoke() ?? DateTimeOffset.UtcNow;
-    public string OutboxPath => Path.Combine(folder, "EmpatesJornadaRonda.csv");
+    public string OutboxPath => Path.Combine(folder, "EmpatesJornadaRonda128.csv");
     private string ReceiptPath => Path.Combine(folder, "round-receipt.json");
     private void Persist(JsonObject state)
     {
@@ -89,13 +93,32 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         if (legacyPilotPath is null) return;
         var pilot = await client.GetAsync(legacyPilotPath, ct);
         var oldState = await client.GetAsync(legacyPilotPath + "/Estado/actual", ct);
-        if (pilot is null) return;
-        if (J.Optional(pilot.Data["action"]) != "authorize" && !J.Bool(oldState?.Data["dispatchReserved"])) return;
-        var matching = history.Where(b => !b.Simulated && b.Currency == "EUR" && b.Type == "BACK" &&
-            b.MarketId == J.Text(pilot.Data["marketId"]) && b.SelectionId == "58805" &&
-            b.StrategyName == "Empates por jornada" && b.Tipster.Equals("empatesjornada", StringComparison.OrdinalIgnoreCase)).ToList();
-        if (matching.Count != 1 || !matching[0].Terminal || matching[0].Matched != 1)
-            throw new InvalidDataException("La primera prueba de 1 € sigue sin conciliar. No se activa la nueva ronda.");
+        if (pilot is not null && (J.Optional(pilot.Data["action"]) == "authorize" || J.Bool(oldState?.Data["dispatchReserved"])))
+        {
+            var matching = history.Where(b => !b.Simulated && b.Currency == "EUR" && b.Type == "BACK" &&
+                b.MarketId == J.Text(pilot.Data["marketId"]) && b.SelectionId == "58805" &&
+                b.StrategyName == "Empates por jornada" && b.Tipster.Equals("empatesjornada", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matching.Count != 1 || !matching[0].Terminal || matching[0].Matched != 1)
+                throw new InvalidDataException("La primera prueba de 1 € sigue sin conciliar. No se activa la nueva ronda.");
+        }
+        var previousPath = "PuenteJornadaRondaReal/" + legacyPilotPath.Split('/')[^1];
+        var previous = await client.GetAsync(previousPath, ct);
+        if (previous is null) return;
+        var previousState = await client.GetAsync(previousPath + "/Estado/actual", ct);
+        if (previousState is null) throw new InvalidDataException("Existe un OK anterior de 15 € sin estado confirmado. Revisa esa prueba antes de la nueva.");
+        if (J.Optional(previous.Data["action"]) != "revoke" && !J.Bool(previousState.Data["terminal"]))
+            throw new InvalidDataException("Revoca primero los siguientes envíos de la ronda anterior de 15 €.");
+        var previousOrders = previousState.Data["orders"] as JsonArray ?? throw new InvalidDataException("Falta el historial de reservas anterior.");
+        if (J.Int(previousState.Data["reservedCount"]) != previousOrders.Count) throw new InvalidDataException("Reservas anteriores incoherentes.");
+        foreach (var n in previousOrders)
+        {
+            var order = J.Object(n);
+            var matching = history.Where(b => !b.Simulated && b.Currency == "EUR" && b.Type == "BACK" && b.SelectionId == "58805" &&
+                b.MarketId == J.Text(order["marketId"]) && b.StrategyName == "Empates jornada 15 EUR" &&
+                b.Tipster.Equals("EmpatesJornadaRonda", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matching.Count != 1 || !matching[0].Terminal || matching[0].Matched != J.Int(order["cents"]) / 100m)
+                throw new InvalidDataException("Hay órdenes de la ronda de 15 € sin liquidar o conciliar. No se amplía el riesgo.");
+        }
     }
 
     public async Task<JsonObject> TickAsync(CancellationToken ct)
@@ -105,7 +128,7 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         var command = await client.GetAsync(client.CommandPath, ct);
         var old = await client.GetAsync(client.StatePath, ct);
         var state = old?.Data.DeepClone().AsObject() ?? new JsonObject
-        { ["mode"] = "live-round-15", ["requestId"] = "", ["fingerprint"] = "", ["reservedCount"] = 0, ["orders"] = new JsonArray(), ["terminal"] = false };
+        { ["mode"] = "live-round-128-v1", ["requestId"] = "", ["fingerprint"] = "", ["reservedCount"] = 0, ["orders"] = new JsonArray(), ["terminal"] = false };
         if (J.Optional(state["agentId"]) is string other && other != agentId && state["leaseUntil"] is not null && J.Time(state["leaseUntil"]) > Now)
             throw new InvalidOperationException("Otro PC controla esta prueba.");
         state["agentId"] = agentId; state["lastSeenAt"] = J.Iso(Now); state["leaseUntil"] = J.Iso(Now.AddSeconds(60));
@@ -119,7 +142,7 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
             return state;
         }
         if (old is null) await Save("checking", "Conectado: comprobando la autorización y el historial.");
-        if (command is null) return await Save("idle", $"Historial leído: {history.Count} registros. Esperando OK de ronda REAL; máximo 15 €.");
+        if (command is null) return await Save("idle", $"Historial leído: {history.Count} registros. Esperando OK de ronda REAL; máximo acumulado 255 € (128 € por apuesta).");
         var c = LiveRoundCommand.Parse(command.Data);
         if (J.Text(state["requestId"]) is { Length: > 0 } previous && previous != c.Id ||
             J.Text(state["fingerprint"]) is { Length: > 0 } fingerprint && fingerprint != c.Fingerprint)
@@ -181,13 +204,13 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         { state["evidence"] = signature; state["evidenceAt"] = J.Iso(Now); return await Save("confirming", "Liquidación leída. Esperando una segunda lectura estable antes de continuar."); }
         if (reserved > 0 && Now - J.Time(state["evidenceAt"]) < TimeSpan.FromSeconds(15))
             return await Save("confirming", "Esperando confirmar la liquidación estable.");
-        if (reserved >= c.Legs.Count || reserved == 4) return await Save("completed", "Terminados los partidos autorizados. No hay reinicio automático.", true);
+        if (reserved >= c.Legs.Count || reserved == 8) return await Save("completed", "Terminados los partidos autorizados. No hay reinicio automático.", true);
         var next = c.Legs[reserved]; var nextCents = 100 << reserved;
-        if (spent + nextCents > 1500) return await Save("stopped", "Límite total de 15 € alcanzado.", true);
+        if (spent + nextCents > 25500 || nextCents > 12800) return await Save("stopped", "Límite total de 255 € o máximo por apuesta de 128 € alcanzado.", true);
         if (Now >= c.Expires || fixtures.Any(f => f.Id == next.MatchId && (f.Final || f.Unavailable)) || Now >= next.Kickoff.AddSeconds(-60))
             return await Save("stopped", "Se perdió la ventana del siguiente partido. No se salta ni se apuesta en directo.", true);
         if (readOnly) return await Save("read_only", "Sólo comprobación: historial conciliado; no se publican órdenes reales.");
-        if (Now < next.Kickoff.AddMinutes(-5)) return await Save("waiting", $"Esperando a {next.Home} — {next.Away}. Próximo importe: {nextCents / 100} €. Máximo total 15 €.");
+        if (Now < next.Kickoff.AddMinutes(-5)) return await Save("waiting", $"Esperando a {next.Home} — {next.Away}. Próximo importe: {nextCents / 100} €. Máximo total 255 €.");
         var unresolved = fixtures.Any(f => !ExcludedTeams.IsExcludedFixture(f) && !f.Final && !f.Unavailable &&
             (f.Kickoff is null || f.Kickoff <= Now));
         if (unresolved) return await Save("waiting_results", "Hay un partido iniciado sin final confirmado. No se envía otra apuesta.");

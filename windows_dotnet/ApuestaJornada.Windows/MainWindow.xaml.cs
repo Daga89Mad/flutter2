@@ -25,7 +25,7 @@ public partial class MainWindow : Window
 
     private void RoundModeChanged(object sender, RoutedEventArgs e)
     {
-        var name = RoundMode.IsChecked == true ? "EmpatesJornada_Ronda15.gz" : "EmpatesJornada_PruebaReal.gz";
+        var name = RoundMode.IsChecked == true ? "EmpatesJornada_Ronda128.gz" : "EmpatesJornada_PruebaReal.gz";
         var path = Path.Combine(AppContext.BaseDirectory, name);
         if (StrategyPath is not null && File.Exists(path)) StrategyPath.Text = path;
     }
@@ -51,7 +51,7 @@ public partial class MainWindow : Window
         {
             try { LiveStrategyValidator.Validate(strategyFile, roundMode); }
             catch (Exception error) { Status.Text = "Revisa el archivo de estrategia: " + error.Message; return; }
-            if (MessageBox.Show(roundMode ? "Ronda REAL: el OK del móvil permite hasta 4 apuestas de 1, 2, 4 y 8 €, con un total máximo de 15 €. Importa EmpatesJornada_Ronda15.gz, pausa la estrategia antigua y verifica el guardado automático del historial. No se progresa sin liquidación completa." : "Modo REAL: el próximo OK REAL del móvil podrá publicar una orden BACK al empate de 1 €. Comprueba que BF Bot Manager usa la cuenta en euros y la estrategia revisada. No se enviará una segunda orden sin reconciliación.", "Activar recepción de OK real", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+            if (MessageBox.Show(roundMode ? "Ronda REAL: el OK del móvil permite hasta 8 apuestas: 1, 2, 4, 8, 16, 32, 64 y 128 €. Máximo por apuesta 128 € y acumulado 255 €. Importa EmpatesJornada_Ronda128.gz, pausa la estrategia antigua y verifica el guardado automático del historial. No se progresa sin liquidación completa." : "Modo REAL: el próximo OK REAL del móvil podrá publicar una orden BACK al empate de 1 €. Comprueba que BF Bot Manager usa la cuenta en euros y la estrategia revisada. No se enviará una segunda orden sin reconciliación.", "Activar recepción de OK real", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
         }
         RoundMode.IsEnabled = ReadOnlyMode.IsEnabled = HistoryPath.IsEnabled = AutoSaveVerified.IsEnabled = LiveMode.IsEnabled = StrategyPath.IsEnabled = false;
         cancellation = new(); Connect.IsEnabled = Email.IsEnabled = Password.IsEnabled = false; Stop.IsEnabled = true;
@@ -88,7 +88,7 @@ public partial class MainWindow : Window
                 var ledger = new Ledger(Path.Combine(folder, "dotnet-history"));
                 var worker = new BridgeWorker(client, ledger, provider, agent);
                 var liveWorker = new LivePilotWorker(client, provider, agent, Path.Combine(folder, "bfbot-live"), strategyFile);
-                var roundWorker = new LiveRoundWorker(client, provider, agent, Path.Combine(folder, "bfbot-round15"), strategyFile, historyFile, readOnlyRound, $"PuenteJornadaReal/{client.Uid}");
+                var roundWorker = new LiveRoundWorker(client, provider, agent, Path.Combine(folder, "bfbot-round128"), strategyFile, historyFile, readOnlyRound, $"PuenteJornadaReal/{client.Uid}");
                 Outbox.Text = "Ruta para la carga automática de tips en BF Bot Manager: " + (roundMode ? roundWorker.OutboxPath : liveWorker.OutboxPath);
                 Status.Text = "Sesión iniciada. Esperando el OK del móvil…";
                 while (!ct.IsCancellationRequested)
@@ -101,7 +101,7 @@ public partial class MainWindow : Window
                         LastSeen.Text = "Última confirmación: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
                         if (roundMode)
                         {
-                            Round.Text = $"RONDA REAL · máximo 15 € · Estado: {J.Optional(state["status"])}";
+                            Round.Text = $"RONDA REAL · máximo por apuesta 128 € · total 255 € · Estado: {J.Optional(state["status"])}";
                             History.ItemsSource = (state["orders"] as JsonArray ?? []).Select(n => J.Object(n)).Select(o => new
                             { Match = J.Text(o["matchId"]), Amount = $"{J.Int(o["cents"]) / 100.0:0.00} €", Odds = J.Optional(o["status"]) }).ToList();
                         }
