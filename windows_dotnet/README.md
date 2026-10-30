@@ -1,3 +1,5 @@
+> Actualización 0.7: para la ronda de máximo 128 EUR por apuesta / 255 EUR acumulados, consulta [README_Ronda128.md](README_Ronda128.md).
+
 # Apuesta a jornada · C# / .NET para Windows · 0.4
 
 Aplicación WPF en C# con .NET 10. Conserva la simulación existente y añade un

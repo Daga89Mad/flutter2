@@ -1,3 +1,5 @@
+> Documento histórico de la versión 0.6. Para el programa actual 0.7 consulta README_Ronda128.md. El límite nuevo requiere otro OK y otra estrategia.
+
 # Ronda real de hasta 15 EUR — versión 0.6
 
 Implementa una prueba independiente con hasta cuatro encuentros elegidos de una jornada de LaLiga. Empieza en 1 EUR y duplica sólo después de una derrota totalmente liquidada: 1, 2, 4, 8 EUR. Máximo acumulado 15 EUR. Se detiene al ganar o aparecer un nuevo empate final en un encuentro elegible de la jornada. Los partidos finalizados al autorizar quedan fuera del nuevo inicio. Se excluye cualquier partido con Real Madrid, Barcelona o Atlético de Madrid. El lunes conserva la progresión y el presupuesto de la misma jornada.

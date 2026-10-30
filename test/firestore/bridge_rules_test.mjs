@@ -121,6 +121,40 @@ try {
  await no(updateDoc(roundState,{reservedCount:2,orders:[{},{}]}));
  await ok(updateDoc(roundRef,{action:'revoke',updatedAt:serverTimestamp()}));
  await no(updateDoc(roundRef,{action:'authorize',updatedAt:serverTimestamp()}));
+ // Ronda REAL aislada: autorización inmutable y reservas monótonas.
+ const round128Ref=doc(owner,'PuenteJornadaRonda128Real/owner');
+ const round128={schema:1,mode:'live-round-128-v1',requestId:'f'.repeat(32),action:'authorize',scope:'LaLiga/2026-2027/1',
+   approvedAt:serverTimestamp(),updatedAt:serverTimestamp(),expiresAt:Timestamp.fromMillis(Date.now()+86400000),
+   currency:'EUR',budgetCents:25500,maxStakeCents:12800,maxBets:8,minPrice:2.8,maxPrice:20,excludeBigThree:true,marketConfirmed:true,fromNow:true,
+   schedule:'[]',legs:'[]',baselineFinishedIds:[]};
+ await no(setDoc(doc(other,'PuenteJornadaRonda128Real/other'),round128));
+ await no(setDoc(doc(anon,'PuenteJornadaRonda128Real/owner'),round128));
+ for(const extra of [{mode:'simulation'},{budgetCents:25600},{maxBets:9},{maxStakeCents:12900},{mode:'live-round-15'},{excludeBigThree:false},{currency:'GBP'},{marketConfirmed:false}]) await no(setDoc(round128Ref,{...round128,...extra}));
+ const missingMax={...round128}; delete missingMax.maxStakeCents; await no(setDoc(round128Ref,missingMax));
+ await ok(setDoc(round128Ref,round128));
+ await no(getDoc(doc(other,'PuenteJornadaRonda128Real/owner')));
+ await no(getDocs(collection(owner,'PuenteJornadaRonda128Real')));
+ await no(setDoc(doc(owner,'PuenteJornadaRonda128Real/owner/Unexpected/doc'),{}));
+ await no(updateDoc(round128Ref,{budgetCents:3100,updatedAt:serverTimestamp()}));
+ await no(deleteDoc(round128Ref));
+ const round128State=doc(owner,'PuenteJornadaRonda128Real/owner/Estado/actual');
+ const rs128={mode:'live-round-128-v1',requestId:round128.requestId,fingerprint:'hash',reservedCount:0,orders:[],terminal:false,
+   agentId:'pc',lastSeenAt:Timestamp.now(),leaseUntil:Timestamp.now(),status:'waiting',message:'checking'};
+ await no(setDoc(round128State,{...rs128,reservedCount:1,orders:[{}]}));
+ await ok(setDoc(round128State,rs128));
+ await no(updateDoc(round128State,{reservedCount:2,orders:[{},{}]}));
+ await ok(updateDoc(round128State,{reservedCount:1,orders:[{cents:100}]}));
+ await no(updateDoc(round128State,{reservedCount:0,orders:[]}));
+ await no(updateDoc(round128State,{fingerprint:'other'}));
+ await no(updateDoc(round128State,{requestId:'a'.repeat(32)}));
+ await no(updateDoc(round128State,{spentCents:25600}));
+ await no(deleteDoc(round128State));
+ await no(getDoc(doc(other,'PuenteJornadaRonda128Real/owner/Estado/actual')));
+ await ok(updateDoc(round128State,{terminal:true}));
+ await no(updateDoc(round128State,{terminal:false}));
+ await no(updateDoc(round128State,{reservedCount:2,orders:[{},{}]}));
+ await ok(updateDoc(round128Ref,{action:'revoke',updatedAt:serverTimestamp()}));
+ await no(updateDoc(round128Ref,{action:'authorize',updatedAt:serverTimestamp()}));
  await env.withSecurityRulesDisabled(async context => {
    await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
    await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));

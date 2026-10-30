@@ -71,13 +71,13 @@ public static class LiveStrategyValidator
         void Number(XElement e, string key, decimal expected) { if (!decimal.TryParse(e.Element(key)?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) || value != expected) throw new InvalidDataException($"Configuración requerida: {key} = {expected}."); }
         var known = new HashSet<string> { "TimeToBetCondition", "OverroundCondition", "DefaultBetTypeCondition", "MinMaxSelectionPriceCondition", "BackLayRatioCondition", "PriceRuleCondition", "LevelStakeCondition", "TipsCondition", "CancelIfUnmatchedCondition" };
         if (!known.SetEquals(rules.Keys) || s.Element("StandaloneConditions")?.HasElements == true) throw new InvalidDataException("La estrategia contiene reglas adicionales o le faltan reglas revisadas.");
-        Has(s, "Name", round ? "Empates jornada 15 EUR" : "Empates por jornada"); Number(s, "MaxBetLiability", round ? 8 : 1); Number(s, "MaxNumOfBetsPerRunner", 1); Number(s, "MaxNumOfBetsPerMarket", 1); Number(s, "MaxNumOfBetsPerEvent", 1);
+        Has(s, "Name", round ? "Empates jornada max128 EUR" : "Empates por jornada"); Number(s, "MaxBetLiability", round ? 128 : 1); Number(s, "MaxNumOfBetsPerRunner", 1); Number(s, "MaxNumOfBetsPerMarket", 1); Number(s, "MaxNumOfBetsPerEvent", 1);
         var t = Rule("TimeToBetCondition"); Has(t, "BetBeforeInPlay", "true"); Has(t, "StopBeforeInPlay", "true"); Has(t, "KeepBettingInPlay", "false"); Has(t, "BetAfterInPlay", "false"); Number(t, "BeforeInPlay", 3000000000); Number(t, "StopBeforeInPlayTicks", 600000000);
         Has(Rule("DefaultBetTypeCondition"), "BetType", "BACK");
         var prices = Rule("MinMaxSelectionPriceCondition"); Number(prices, "MinPrice", 2.8m); Number(prices, "MaxPrice", 20); Has(prices, "PriceType", "BackPrice"); Has(prices, "IgnoreBeforeStartTime", "false"); Has(prices, "UseCustomPriceRange", "false");
         var p = Rule("PriceRuleCondition"); Has(p, "InitialPriceChoice", "ActualPrice"); Has(p, "UseStartPrices", "false"); foreach (var key in new[] { "TicksToImprove", "TicksToWorsen", "PercentsToImprove", "PercentsToWorsen" }) Number(p, key, 0);
         Number(Rule("LevelStakeCondition"), "Stake", 1); Has(Rule("LevelStakeCondition"), "UseCustomStake", "false");
-        var tips = Rule("TipsCondition"); Has(tips, "ProvidersCSV", round ? "EmpatesJornadaRonda" : "EmpatesJornada"); Has(tips, "IgnoreTipBetType", "false"); Has(tips, "IgnoreTipPrice", "false"); Has(tips, "IgnoreTipStake", round ? "false" : "true"); Has(tips, "IgnoreTipPoints", "true"); Has(tips, "IgnoreMinMaxPrice", "false");
+        var tips = Rule("TipsCondition"); Has(tips, "ProvidersCSV", round ? "EmpatesJornadaRonda128" : "EmpatesJornada"); Has(tips, "IgnoreTipBetType", "false"); Has(tips, "IgnoreTipPrice", "false"); Has(tips, "IgnoreTipStake", round ? "false" : "true"); Has(tips, "IgnoreTipPoints", "true"); Has(tips, "IgnoreMinMaxPrice", "false");
         var cancel = Rule("CancelIfUnmatchedCondition"); Has(cancel, "CancelBeforeStart", "true"); Number(cancel, "BeforeStart", 300000000);
     }
 }

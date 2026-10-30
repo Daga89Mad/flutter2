@@ -385,12 +385,63 @@ service cloud.firestore {
       }
     }
 
+    // Ronda REAL independiente: una autorización por cuenta, máximo ocho reservas, 128 EUR por apuesta y 255 EUR acumulados.
+    function validLiveRound128(d) {
+      return d.keys().hasOnly(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds'])
+        && d.keys().hasAll(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds'])
+        && d.schema == 1 && d.mode == 'live-round-128-v1' && d.action == 'authorize'
+        && d.requestId is string && d.requestId.matches('^[a-f0-9]{32}$')
+        && d.scope is string && d.scope.matches('^LaLiga/[0-9]{4}-[0-9]{4}/([1-9]|[12][0-9]|3[0-8])$')
+        && d.currency == 'EUR' && d.budgetCents == 25500 && d.maxStakeCents == 12800 && d.maxBets == 8
+        && d.minPrice == 2.8 && d.maxPrice == 20 && d.excludeBigThree == true
+        && d.marketConfirmed == true && d.fromNow == true
+        && d.schedule is string && d.schedule.size() > 0 && d.schedule.size() < 20000
+        && d.legs is string && d.legs.size() > 0 && d.legs.size() < 8000
+        && d.baselineFinishedIds is list && d.baselineFinishedIds.size() <= 9
+        && d.baselineFinishedIds.toSet().size() == d.baselineFinishedIds.size()
+        && d.approvedAt == request.time && d.updatedAt == request.time
+        && d.expiresAt is timestamp && d.expiresAt > request.time
+        && d.expiresAt <= request.time + duration.value(4, 'd');
+    }
+    match /PuenteJornadaRonda128Real/{uid} {
+      allow read: if isOwner(uid) && jornadaAutorizada();
+      allow create: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data);
+      allow update: if isOwner(uid) && request.resource.data.action == 'revoke'
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action','updatedAt']);
+      allow delete: if false;
+      match /Estado/actual {
+        function validState(d) {
+          return d.keys().hasOnly(['mode','requestId','fingerprint','reservedCount','orders','terminal','agentId','lastSeenAt','leaseUntil','status','message','spentCents','evidence','evidenceAt'])
+            && d.mode == 'live-round-128-v1'
+            && d.requestId is string && d.fingerprint is string
+            && d.agentId is string && d.agentId.size() > 0 && d.agentId.size() <= 100
+            && d.lastSeenAt is timestamp && d.leaseUntil is timestamp
+            && d.reservedCount is int && d.reservedCount >= 0 && d.reservedCount <= 8
+            && d.orders is list && d.orders.size() == d.reservedCount
+            && d.terminal is bool
+            && d.status is string && d.message is string && d.message.size() <= 2000
+            && (!('spentCents' in d) || (d.spentCents is int && d.spentCents >= 0 && d.spentCents <= 25500));
+        }
+        allow read: if isOwner(uid) && jornadaAutorizada();
+        allow create: if isOwner(uid) && jornadaAutorizada() && validState(request.resource.data)
+          && request.resource.data.reservedCount == 0;
+        allow update: if isOwner(uid) && jornadaAutorizada() && validState(request.resource.data)
+          && request.resource.data.reservedCount >= resource.data.reservedCount
+          && request.resource.data.reservedCount <= resource.data.reservedCount + 1
+          && (resource.data.requestId == '' || request.resource.data.requestId == resource.data.requestId)
+          && (resource.data.fingerprint == '' || request.resource.data.fingerprint == resource.data.fingerprint)
+          && (!resource.data.terminal || (request.resource.data.terminal == true && request.resource.data.reservedCount == resource.data.reservedCount));
+        allow delete: if false;
+      }
+    }
+
     // RESTO: mismo comportamiento de tu aplicación actual.
     match /{collection}/{rest=**} {
-      allow read: if signedIn() && !(collection in ['PuenteJornada', 'PuenteJornadaReal', 'PuenteJornadaRondaReal', 'AccesoApuestaJornada']);
+      allow read: if signedIn() && !(collection in ['PuenteJornada', 'PuenteJornadaReal', 'PuenteJornadaRondaReal', 'PuenteJornadaRonda128Real', 'AccesoApuestaJornada']);
       allow write: if signedIn()
         && !(collection in [
-          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada', 'PuenteJornadaReal', 'PuenteJornadaRondaReal', 'AccesoApuestaJornada'
+          'Apuestas', 'Traspasos', 'PronosticosEmpates', 'ConfiguracionEmpates', 'PuenteJornada', 'PuenteJornadaReal', 'PuenteJornadaRondaReal', 'PuenteJornadaRonda128Real', 'AccesoApuestaJornada'
         ]);
     }
   }
