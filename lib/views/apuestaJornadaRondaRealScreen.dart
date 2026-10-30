@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/core/roundAuthorization.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
+import 'package:plantillalogin/core/liveRoundRestart.dart';
 
 bool excludedRoundTeam(String name) {
   var text = name.toLowerCase();
@@ -59,6 +60,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       events = <String, TextEditingController>{};
   bool busy = false, confirmed = false;
   String? error;
+  String? replacingRequestId;
   DocumentReference<Map<String, dynamic>> get command => FirebaseFirestore
       .instance
       .collection('PuenteJornadaRonda128Real')
@@ -198,7 +200,9 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Autorizar ronda REAL · máximo por apuesta 128 € · total 255 €'),
+          title: const Text(
+            'Autorizar ronda REAL · máximo por apuesta 128 € · total 255 €',
+          ),
           content: SingleChildScrollView(
             child: Text(
               '${widget.scope}\n\n${legs.asMap().entries.map((e) => '${1 << e.key} € · ${e.value.label}\n${e.value.kickoff!.toLocal()}\nMarketId ${markets[e.value.id]!.text.trim()} · EventId ${events[e.value.id]!.text.trim()}').join('\n\n')}\n\n'
@@ -247,16 +251,42 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       await FirebaseFirestore.instance.runTransaction((tx) async {
         final previous = await tx.get(target), simulation = await tx.get(sim);
         final simState = await tx.get(sim.collection('Estado').doc('actual'));
-        final oldRef = FirebaseFirestore.instance.collection('PuenteJornadaRondaReal').doc(uid);
+        final oldRef = FirebaseFirestore.instance
+            .collection('PuenteJornadaRondaReal')
+            .doc(uid);
         final oldRound = await tx.get(oldRef);
-        final oldState = await tx.get(oldRef.collection('Estado').doc('actual'));
-        if (oldRound.exists && oldRound.data()?['action'] != 'revoke' && oldState.data()?['terminal'] != true) {
-          throw StateError('Revoca primero los siguientes envíos de la ronda anterior de 15 €.');
-        }
-        if (previous.exists)
+        final oldState = await tx.get(
+          oldRef.collection('Estado').doc('actual'),
+        );
+        if (oldRound.exists &&
+            oldRound.data()?['action'] != 'revoke' &&
+            oldState.data()?['terminal'] != true) {
           throw StateError(
-            'Esta cuenta ya tiene una prueba de ronda. No se reinicia ni se reemplaza.',
+            'Revoca primero los siguientes envíos de la ronda anterior de 15 €.',
           );
+        }
+        final previousState = await tx.get(
+          target.collection('Estado').doc('actual'),
+        );
+        DocumentSnapshot<Map<String, dynamic>>? archive;
+        if (previous.exists) {
+          final old = previous.data()!, state = previousState.data();
+          if (replacingRequestId != old['requestId'] ||
+              !canReplaceUnusedLiveRound(old, state)) {
+            throw StateError(
+              'Sólo puede sustituirse una ronda terminada sin ninguna orden reservada.',
+            );
+          }
+          archive = await tx.get(
+            target.collection('Archivo').doc(old['requestId'] as String),
+          );
+          if (archive.exists)
+            throw StateError(
+              'Esta ronda ya está archivada. Actualiza la pantalla.',
+            );
+        } else if (replacingRequestId != null) {
+          throw StateError('La ronda anterior cambió. Actualiza la pantalla.');
+        }
         if (simulation.data()?['action'] == 'authorize' &&
             !(simState.data()?['requestId'] ==
                     simulation.data()?['requestId'] &&
@@ -264,6 +294,13 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           throw StateError(
             'Revoca primero el ensayo de simulación y espera la confirmación del PC.',
           );
+        }
+        if (previous.exists) {
+          tx.set(archive!.reference, {
+            'authorization': previous.data(),
+            'state': previousState.data(),
+            'archivedAt': FieldValue.serverTimestamp(),
+          });
         }
         tx.set(target, {
           'schema': 1,
@@ -290,6 +327,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           'baselineFinishedIds': baseline.toList(),
         });
       });
+      if (mounted) setState(() => replacingRequestId = null);
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -297,12 +335,43 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
     }
   }
 
+  Future<void> prepareRemaining(Map<String, dynamic> previous) async {
+    await reload();
+    if (!mounted || error != null) return;
+    try {
+      // Conserva sólo identificadores del mismo partido y de la misma jornada.
+      if (previous['scope'] == widget.scope) {
+        final rows = jsonDecode(previous['legs'] as String) as List;
+        for (final row in rows) {
+          final r = row as List;
+          if (r.length == 6 &&
+              fixtures.any(
+                (m) => m.id == r[0] && m.home == r[1] && m.away == r[2],
+              )) {
+            markets[r[0]]?.text = r[4] as String;
+            events[r[0]]?.text = r[5] as String;
+          }
+        }
+      }
+      setState(() {
+        replacingRequestId = previous['requestId'] as String;
+        confirmed = false;
+      });
+    } catch (e) {
+      setState(() => error = 'No se pudieron recuperar los IDs anteriores: $e');
+    }
+  }
+
   Future<void> revokePrevious() async {
     setState(() => busy = true);
     try {
-      await FirebaseFirestore.instance.collection('PuenteJornadaRondaReal')
+      await FirebaseFirestore.instance
+          .collection('PuenteJornadaRondaReal')
           .doc(FirebaseAuth.instance.currentUser!.uid)
-          .update({'action': 'revoke', 'updatedAt': FieldValue.serverTimestamp()});
+          .update({
+            'action': 'revoke',
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -326,7 +395,9 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Ronda REAL · máximo por apuesta 128 € · total 255 €')),
+    appBar: AppBar(
+      title: const Text('Ronda REAL · máximo por apuesta 128 € · total 255 €'),
+    ),
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -338,17 +409,32 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes.',
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance.collection('PuenteJornadaRondaReal')
-              .doc(FirebaseAuth.instance.currentUser!.uid).snapshots(),
+          stream: FirebaseFirestore.instance
+              .collection('PuenteJornadaRondaReal')
+              .doc(FirebaseAuth.instance.currentUser!.uid)
+              .snapshots(),
           builder: (context, previous) {
-            if (previous.hasError) return Text('No se pudo consultar la ronda anterior: ${previous.error}');
+            if (previous.hasError)
+              return Text(
+                'No se pudo consultar la ronda anterior: ${previous.error}',
+              );
             final old = previous.data?.data();
-            if (old == null || old['action'] == 'revoke') return const SizedBox.shrink();
-            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Existe una autorización anterior de 15 €. El nuevo límite requiere un OK separado. Revocar impide siguientes envíos; no cancela apuestas ya importadas.'),
-              TextButton(onPressed: busy ? null : revokePrevious,
-                child: const Text('Revocar siguientes envíos de la ronda anterior de 15 €')),
-            ]);
+            if (old == null || old['action'] == 'revoke')
+              return const SizedBox.shrink();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Existe una autorización anterior de 15 €. El nuevo límite requiere un OK separado. Revocar impide siguientes envíos; no cancela apuestas ya importadas.',
+                ),
+                TextButton(
+                  onPressed: busy ? null : revokePrevious,
+                  child: const Text(
+                    'Revocar siguientes envíos de la ronda anterior de 15 €',
+                  ),
+                ),
+              ],
+            );
           },
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -358,11 +444,13 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
               return Text('No se pudo leer la ronda: ${snap.error}');
             if (!snap.hasData) return const LinearProgressIndicator();
             final d = snap.data!.data();
-            if (d != null)
+            if (d != null && replacingRequestId == null)
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Autorización guardada · ${d['scope']} · máximo por apuesta 128 € · total 255 €'),
+                  Text(
+                    'Autorización guardada · ${d['scope']} · máximo por apuesta 128 € · total 255 €',
+                  ),
                   StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                     stream: command
                         .collection('Estado')
@@ -381,6 +469,15 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                           Text(
                             '${s['message']}\nÚltima señal: ${s['lastSeenAt']}',
                           ),
+                          if (canReplaceUnusedLiveRound(d, s))
+                            FilledButton(
+                              onPressed: busy
+                                  ? null
+                                  : () => prepareRemaining(d),
+                              child: const Text(
+                                'Preparar nueva ronda desde 1 € · partidos restantes',
+                              ),
+                            ),
                           ...orders.map(
                             (o) => ListTile(
                               title: Text(
@@ -408,6 +505,17 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (replacingRequestId != null) ...[
+                  const Text(
+                    'La ronda anterior no reservó apuestas. Se conservará en el historial al confirmar el nuevo OK. Empiezas desde 1 €.',
+                  ),
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => setState(() => replacingRequestId = null),
+                    child: const Text('Cancelar preparación'),
+                  ),
+                ],
                 Text(widget.scope),
                 if (future(fixtures).isEmpty)
                   const Text(
@@ -465,7 +573,9 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                   onPressed: busy || !confirmed || selected.isEmpty
                       ? null
                       : authorize,
-                  child: const Text('Revisar OK REAL · máximo por apuesta 128 € · total 255 €'),
+                  child: const Text(
+                    'Revisar OK REAL · máximo por apuesta 128 € · total 255 €',
+                  ),
                 ),
                 TextButton(
                   onPressed: busy ? null : reload,

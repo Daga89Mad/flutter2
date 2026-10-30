@@ -155,6 +155,39 @@ try {
  await no(updateDoc(round128State,{reservedCount:2,orders:[{},{}]}));
  await ok(updateDoc(round128Ref,{action:'revoke',updatedAt:serverTimestamp()}));
  await no(updateDoc(round128Ref,{action:'authorize',updatedAt:serverTimestamp()}));
+ // Rearme sólo con cero reservas y archivo atómico e inmutable.
+ const archive128=doc(owner,`PuenteJornadaRonda128Real/owner/Archivo/${round128.requestId}`);
+ const replacement128={...round128,requestId:'a'.repeat(32),approvedAt:serverTimestamp(),updatedAt:serverTimestamp()};
+ function archiveBatch(authorization,state,next=replacement128) {
+   const batch=writeBatch(owner);
+   batch.set(archive128,{authorization,state,archivedAt:serverTimestamp()});
+   batch.set(round128Ref,next);
+   return batch.commit();
+ }
+ let archivedAuthorization=(await getDoc(round128Ref)).data();
+ let archivedState=(await getDoc(round128State)).data();
+ await no(archiveBatch(archivedAuthorization,archivedState)); // Ya hay una reserva.
+ await no(setDoc(round128Ref,replacement128));
+ await env.withSecurityRulesDisabled(async context => {
+   await setDoc(doc(context.firestore(),'PuenteJornadaRonda128Real/owner/Estado/actual'),
+     {...rs128,status:'stopped',terminal:true,reservedCount:0,orders:[],spentCents:0});
+ });
+ archivedState=(await getDoc(round128State)).data();
+ await no(setDoc(archive128,{authorization:archivedAuthorization,state:archivedState,archivedAt:serverTimestamp()}));
+ await no(archiveBatch(archivedAuthorization,{...archivedState,fingerprint:'forged'}));
+ await no(archiveBatch({...archivedAuthorization,budgetCents:1},archivedState));
+ await no(archiveBatch(archivedAuthorization,archivedState,{...replacement128,requestId:round128.requestId}));
+ await no(updateDoc(round128State,{requestId:replacement128.requestId,terminal:false}));
+ await ok(archiveBatch(archivedAuthorization,archivedState));
+ await ok(getDoc(archive128));
+ await no(getDoc(doc(other,`PuenteJornadaRonda128Real/owner/Archivo/${round128.requestId}`)));
+ await no(updateDoc(archive128,{archivedAt:serverTimestamp()}));
+ await no(deleteDoc(archive128));
+ await no(setDoc(round128State,{...rs128,requestId:replacement128.requestId,fingerprint:'new',reservedCount:1,orders:[{}]}));
+ await ok(setDoc(round128State,{...rs128,requestId:replacement128.requestId,fingerprint:'new',spentCents:0}));
+ await no(setDoc(round128State,{...rs128,requestId:round128.requestId}));
+ await ok(updateDoc(round128State,{reservedCount:1,orders:[{cents:100}],spentCents:100}));
+ await no(updateDoc(round128State,{reservedCount:0,orders:[],spentCents:0}));
  await env.withSecurityRulesDisabled(async context => {
    await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
    await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));

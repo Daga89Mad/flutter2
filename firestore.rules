@@ -404,11 +404,44 @@ service cloud.firestore {
         && d.expiresAt <= request.time + duration.value(4, 'd');
     }
     match /PuenteJornadaRonda128Real/{uid} {
+      function emptyTerminal(d) {
+        return d.terminal == true && d.reservedCount == 0 && d.orders == []
+          && d.get('spentCents', 0) == 0 && d.status in ['stopped', 'revoked', 'completed'];
+      }
+      function previousState() {
+        return get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Estado/actual).data;
+      }
+      function archived(id) {
+        return getAfter(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Archivo/$(id)).data;
+      }
       allow read: if isOwner(uid) && jornadaAutorizada();
       allow create: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data);
       allow update: if isOwner(uid) && request.resource.data.action == 'revoke'
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action','updatedAt']);
+      // Nuevo OK sólo cuando la ronda anterior nunca reservó órdenes.
+      // El mismo lote debe conservar íntegros el OK y su estado anterior.
+      allow update: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data)
+        && request.resource.data.requestId != resource.data.requestId
+        && !exists(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Archivo/$(request.resource.data.requestId))
+        && request.resource.data.approvedAt > resource.data.approvedAt
+        && previousState().requestId == resource.data.requestId && emptyTerminal(previousState())
+        && archived(resource.data.requestId).authorization == resource.data
+        && archived(resource.data.requestId).state == previousState()
+        && archived(resource.data.requestId).archivedAt == request.time;
+      match /Archivo/{id} {
+        allow read: if isOwner(uid) && jornadaAutorizada();
+        allow create: if isOwner(uid) && jornadaAutorizada()
+          && request.resource.data.keys().hasAll(['authorization','state','archivedAt'])
+          && request.resource.data.keys().hasOnly(['authorization','state','archivedAt'])
+          && request.resource.data.archivedAt == request.time
+          && request.resource.data.authorization == get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data
+          && request.resource.data.authorization.requestId == id
+          && request.resource.data.state == previousState()
+          && request.resource.data.state.requestId == id && emptyTerminal(request.resource.data.state)
+          && getAfter(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data.requestId != id;
+        allow update, delete: if false;
+      }
       allow delete: if false;
       match /Estado/actual {
         function validState(d) {
@@ -432,6 +465,15 @@ service cloud.firestore {
           && (resource.data.requestId == '' || request.resource.data.requestId == resource.data.requestId)
           && (resource.data.fingerprint == '' || request.resource.data.fingerprint == resource.data.fingerprint)
           && (!resource.data.terminal || (request.resource.data.terminal == true && request.resource.data.reservedCount == resource.data.reservedCount));
+        allow update: if isOwner(uid) && jornadaAutorizada() && validState(request.resource.data)
+          && emptyTerminal(resource.data)
+          && archived(resource.data.requestId).state.requestId == resource.data.requestId
+          && archived(resource.data.requestId).state.fingerprint == resource.data.fingerprint
+          && emptyTerminal(archived(resource.data.requestId).state)
+          && request.resource.data.requestId != resource.data.requestId
+          && request.resource.data.requestId == get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data.requestId
+          && request.resource.data.reservedCount == 0 && request.resource.data.orders == []
+          && request.resource.data.get('spentCents', 0) == 0 && request.resource.data.terminal == false;
         allow delete: if false;
       }
     }

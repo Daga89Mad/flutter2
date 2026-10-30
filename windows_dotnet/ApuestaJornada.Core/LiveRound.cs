@@ -144,9 +144,32 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         if (old is null) await Save("checking", "Conectado: comprobando la autorización y el historial.");
         if (command is null) return await Save("idle", $"Historial leído: {history.Count} registros. Esperando OK de ronda REAL; máximo acumulado 255 € (128 € por apuesta).");
         var c = LiveRoundCommand.Parse(command.Data);
-        if (J.Text(state["requestId"]) is { Length: > 0 } previous && previous != c.Id ||
-            J.Text(state["fingerprint"]) is { Length: > 0 } fingerprint && fingerprint != c.Fingerprint)
-            throw new InvalidDataException("La autorización cambió. No se inicia otra ronda.");
+        if (J.Text(state["requestId"]) is { Length: > 0 } previous && previous != c.Id)
+        {
+            // Sólo se rearma una ronda que nunca reservó ni publicó una orden.
+            var archive = await client.GetAsync(client.CommandPath + "/Archivo/" + previous, ct);
+            if (archive is null) throw new InvalidDataException("Falta el archivo permanente de la ronda anterior.");
+            var archivedState = J.Object(archive.Data["state"]);
+            var archivedCommand = LiveRoundCommand.Parse(J.Object(archive.Data["authorization"]));
+            bool EmptyTerminal(JsonObject d) => J.Bool(d["terminal"]) && J.Int(d["reservedCount"]) == 0 &&
+                d["orders"] is JsonArray rows && rows.Count == 0 && J.Int(d["spentCents"] ?? JsonValue.Create(0)) == 0 &&
+                new[] { "stopped", "revoked", "completed" }.Contains(J.Text(d["status"]));
+            if (!EmptyTerminal(state) || !EmptyTerminal(archivedState) || archivedCommand.Id != previous ||
+                J.Text(archivedState["requestId"]) != previous ||
+                J.Text(archivedState["fingerprint"]) != archivedCommand.Fingerprint ||
+                J.Text(state["fingerprint"]) != archivedCommand.Fingerprint || c.Approved <= archivedCommand.Approved ||
+                File.Exists(ReceiptPath) || File.Exists(OutboxPath))
+                throw new InvalidDataException("No puede reiniciarse una ronda con reservas, recibos o CSV previos.");
+            if (history.Any(b => !b.Simulated && !b.Terminal))
+                throw new InvalidDataException("Hay apuestas reales pendientes en el historial. No se rearma la ronda.");
+            state = new JsonObject { ["mode"] = "live-round-128-v1", ["requestId"] = c.Id,
+                ["fingerprint"] = c.Fingerprint, ["reservedCount"] = 0, ["orders"] = new JsonArray(),
+                ["terminal"] = false, ["spentCents"] = 0, ["agentId"] = agentId,
+                ["lastSeenAt"] = J.Iso(Now), ["leaseUntil"] = J.Iso(Now.AddSeconds(60)) };
+            await Save("checking", "Nuevo OK recibido; ronda anterior archivada sin órdenes. Comprobando partidos restantes.");
+        }
+        if (J.Text(state["fingerprint"]) is { Length: > 0 } fingerprint && fingerprint != c.Fingerprint)
+            throw new InvalidDataException("La autorización cambió sin un nuevo OK válido.");
         state["requestId"] = c.Id; state["fingerprint"] = c.Fingerprint;
         var orders = state["orders"] as JsonArray ?? throw new InvalidDataException("Historial remoto inválido.");
         var reserved = J.Int(state["reservedCount"]);
