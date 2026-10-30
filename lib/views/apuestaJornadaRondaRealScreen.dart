@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/material.dart';
 import 'package:plantillalogin/core/roundAuthorization.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
@@ -175,6 +176,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       busy = true;
       error = null;
     });
+    var stage = 'actualizar calendario antes del resumen';
     try {
       final fresh = await widget.refresh();
       final legs = validate(fresh);
@@ -228,6 +230,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       if (ok != true) return;
       if (FirebaseAuth.instance.currentUser?.uid != uid)
         throw StateError('Cambió la cuenta.');
+      stage = 'actualizar calendario después del OK';
       final checked = await widget.refresh();
       validate(checked);
       final newBaseline = checked
@@ -248,16 +251,22 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       final sim = FirebaseFirestore.instance
           .collection('PuenteJornada')
           .doc(uid);
+      stage = 'iniciar transacción de autorización';
       await FirebaseFirestore.instance.runTransaction((tx) async {
-        final previous = await tx.get(target), simulation = await tx.get(sim);
-        final simState = await tx.get(sim.collection('Estado').doc('actual'));
+        Future<DocumentSnapshot<Map<String, dynamic>>> read(
+          DocumentReference<Map<String, dynamic>> ref,
+        ) async {
+          stage = 'leer ${ref.path}';
+          return tx.get(ref);
+        }
+
+        final previous = await read(target), simulation = await read(sim);
+        final simState = await read(sim.collection('Estado').doc('actual'));
         final oldRef = FirebaseFirestore.instance
             .collection('PuenteJornadaRondaReal')
             .doc(uid);
-        final oldRound = await tx.get(oldRef);
-        final oldState = await tx.get(
-          oldRef.collection('Estado').doc('actual'),
-        );
+        final oldRound = await read(oldRef);
+        final oldState = await read(oldRef.collection('Estado').doc('actual'));
         if (oldRound.exists &&
             oldRound.data()?['action'] != 'revoke' &&
             oldState.data()?['terminal'] != true) {
@@ -265,7 +274,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             'Revoca primero los siguientes envíos de la ronda anterior de 15 €.',
           );
         }
-        final previousState = await tx.get(
+        final previousState = await read(
           target.collection('Estado').doc('actual'),
         );
         DocumentSnapshot<Map<String, dynamic>>? archive;
@@ -277,7 +286,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
               'Sólo puede sustituirse una ronda terminada sin ninguna orden reservada.',
             );
           }
-          archive = await tx.get(
+          archive = await read(
             target.collection('Archivo').doc(old['requestId'] as String),
           );
           if (archive.exists)
@@ -295,6 +304,9 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             'Revoca primero el ensayo de simulación y espera la confirmación del PC.',
           );
         }
+        stage = previous.exists
+            ? 'guardar nuevo OK y archivo de la ronda anterior'
+            : 'guardar primer OK de ronda';
         if (previous.exists) {
           tx.set(archive!.reference, {
             'authorization': previous.data(),
@@ -328,6 +340,16 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         });
       });
       if (mounted) setState(() => replacingRequestId = null);
+    } on FirebaseException catch (e) {
+      final project = FirebaseFirestore.instance.app.options.projectId;
+      if (mounted) {
+        setState(
+          () => error =
+              'No se completó la autorización. Etapa: $stage.\n'
+              'Proyecto: $project · Código: ${e.code}.\n'
+              '${e.message ?? "Firestore rechazó la operación."}',
+        );
+      }
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -406,7 +428,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const Text(
-          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes.',
+          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Diagnóstico 0.7.3.',
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance

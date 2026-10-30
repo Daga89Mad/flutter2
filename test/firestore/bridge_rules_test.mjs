@@ -1,5 +1,5 @@
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, Timestamp, writeBatch, deleteDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, Timestamp, writeBatch, runTransaction, deleteDoc, collection, getDocs } from 'firebase/firestore';
 import { readFileSync } from 'node:fs';
 const env = await initializeTestEnvironment({projectId:'demo-jornada', firestore:{host:'127.0.0.1',port:8089,rules:readFileSync(new URL('../../firestore.rules', import.meta.url),'utf8')}});
 const owner = env.authenticatedContext('owner').firestore();
@@ -178,7 +178,18 @@ try {
  await no(archiveBatch({...archivedAuthorization,budgetCents:1},archivedState));
  await no(archiveBatch(archivedAuthorization,archivedState,{...replacement128,requestId:round128.requestId}));
  await no(updateDoc(round128State,{requestId:replacement128.requestId,terminal:false}));
- await ok(archiveBatch(archivedAuthorization,archivedState));
+ await ok(runTransaction(owner,async tx=>{
+   const previous=await tx.get(round128Ref);
+   await tx.get(doc(owner,'PuenteJornada/owner'));
+   await tx.get(doc(owner,'PuenteJornada/owner/Estado/actual'));
+   await tx.get(doc(owner,'PuenteJornadaRondaReal/owner'));
+   await tx.get(doc(owner,'PuenteJornadaRondaReal/owner/Estado/actual'));
+   const state=await tx.get(round128State);
+   const archive=await tx.get(archive128);
+   if(archive.exists()) throw new Error('archive already exists');
+   tx.set(archive128,{authorization:previous.data(),state:state.data(),archivedAt:serverTimestamp()});
+   tx.set(round128Ref,replacement128);
+ }));
  await ok(getDoc(archive128));
  await no(getDoc(doc(other,`PuenteJornadaRonda128Real/owner/Archivo/${round128.requestId}`)));
  await no(updateDoc(archive128,{archivedAt:serverTimestamp()}));
