@@ -185,8 +185,7 @@ try {
    await tx.get(doc(owner,'PuenteJornadaRondaReal/owner'));
    await tx.get(doc(owner,'PuenteJornadaRondaReal/owner/Estado/actual'));
    const state=await tx.get(round128State);
-   const archive=await tx.get(archive128);
-   if(archive.exists()) throw new Error('archive already exists');
+   // No se lee el archivo inexistente: su unicidad la exige la regla create-only.
    tx.set(archive128,{authorization:previous.data(),state:state.data(),archivedAt:serverTimestamp()});
    tx.set(round128Ref,replacement128);
  }));

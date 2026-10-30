@@ -277,7 +277,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         final previousState = await read(
           target.collection('Estado').doc('actual'),
         );
-        DocumentSnapshot<Map<String, dynamic>>? archive;
+        DocumentReference<Map<String, dynamic>>? archive;
         if (previous.exists) {
           final old = previous.data()!, state = previousState.data();
           if (replacingRequestId != old['requestId'] ||
@@ -286,13 +286,11 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
               'Sólo puede sustituirse una ronda terminada sin ninguna orden reservada.',
             );
           }
-          archive = await read(
-            target.collection('Archivo').doc(old['requestId'] as String),
-          );
-          if (archive.exists)
-            throw StateError(
-              'Esta ronda ya está archivada. Actualiza la pantalla.',
-            );
+          // No hace falta leer un archivo inexistente. La regla create-only
+          // comprueba su unicidad al guardar el lote atómico.
+          archive = target
+              .collection('Archivo')
+              .doc(old['requestId'] as String);
         } else if (replacingRequestId != null) {
           throw StateError('La ronda anterior cambió. Actualiza la pantalla.');
         }
@@ -308,7 +306,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             ? 'guardar nuevo OK y archivo de la ronda anterior'
             : 'guardar primer OK de ronda';
         if (previous.exists) {
-          tx.set(archive!.reference, {
+          tx.set(archive!, {
             'authorization': previous.data(),
             'state': previousState.data(),
             'archivedAt': FieldValue.serverTimestamp(),
@@ -428,7 +426,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const Text(
-          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Diagnóstico 0.7.3.',
+          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Diagnóstico 0.7.4.',
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
