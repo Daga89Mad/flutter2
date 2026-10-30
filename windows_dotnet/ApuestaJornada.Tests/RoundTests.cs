@@ -60,6 +60,25 @@ static class RoundTests
         Check(BfHistory.Read(history).Count == 0, "lee historial vacío sin inventar apuestas");
         WriteGzip(history, "<!DOCTYPE x [<!ENTITY e SYSTEM 'file:///etc/passwd'>]><ArrayOfBetHistoryItem>&e;</ArrayOfBetHistoryItem>");
         Reject(() => BfHistory.Read(history), "rechaza DTD y entidades externas");
+        var manual = HistoryBet(0, 1m, start, start.AddHours(2), -1m);
+        manual.Element("Tipster")!.Remove();
+        manual.Element("StrategyID")!.Value = "Manual bets";
+        manual.Element("StrategyName")!.Value = "Manual bets";
+        manual.Element("SimulatedBet")!.Value = "true";
+        WriteGzip(history, new XElement("ArrayOfBetHistoryItem", manual).ToString());
+        var manualRead = BfHistory.Read(history).Single();
+        Check(manualRead.Simulated && manualRead.Tipster == "" && manualRead.StrategyName == "Manual bets",
+            "apuesta manual simulada sin Tipster se lee sin atribuir proveedor");
+        manual.Element("SimulatedBet")!.Value = "false";
+        WriteGzip(history, new XElement("ArrayOfBetHistoryItem", manual).ToString());
+        Check(BfHistory.Read(history).Single().Tipster != LiveRoundCommand.Provider,
+            "apuesta manual real sin Tipster no adopta proveedor de la ronda");
+        manual.Add(new XElement("Tipster", "uno"), new XElement("Tipster", "dos"));
+        WriteGzip(history, new XElement("ArrayOfBetHistoryItem", manual).ToString());
+        Reject(() => BfHistory.Read(history), "Tipster duplicado sigue rechazado");
+        manual.Elements("Tipster").Remove(); manual.Element("BetId")!.Remove();
+        WriteGzip(history, new XElement("ArrayOfBetHistoryItem", manual).ToString());
+        Reject(() => BfHistory.Read(history), "identificadores obligatorios siguen rechazados");
         var bets = new List<XElement>();
         void History() => WriteGzip(history, new XElement("ArrayOfBetHistoryItem", bets).ToString());
         History();

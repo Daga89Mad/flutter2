@@ -38,13 +38,21 @@ public static class BfHistory
         {
             if (e.Name != "BetHistoryItem") throw new InvalidDataException("Registro de historial desconocido.");
             string S(string k) => e.Elements(k).Count() == 1 ? e.Element(k)!.Value : throw new InvalidDataException("Falta/duplica " + k);
+            // BF Bot omite Tipster en apuestas manuales. Vacío nunca coincide
+            // con el proveedor requerido para conciliar una orden de la ronda.
+            string Optional(string k) => e.Elements(k).Count() switch
+            {
+                0 => string.Empty,
+                1 => e.Element(k)!.Value,
+                _ => throw new InvalidDataException("Duplica " + k)
+            };
             decimal N(string k) => decimal.TryParse(S(k), NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
                 CultureInfo.InvariantCulture, out var d) ? d : throw new InvalidDataException("Importe no válido: " + k);
             var simulated = S("SimulatedBet") switch { "true" => true, "false" => false, _ => throw new InvalidDataException("SimulatedBet inválido.") };
             var settledText = e.Element("SettledDate")?.Value;
             var settled = string.IsNullOrWhiteSpace(settledText) || settledText.StartsWith("0001-") ? (DateTimeOffset?)null : J.Time(settledText);
             var bet = new BfBet(S("MarketId"), S("SelectionId"), S("StrategyID"), S("StrategyName"),
-                S("Tipster"), S("BetId"), S("BetType"), S("Currency"), simulated, S("Status"),
+                Optional("Tipster"), S("BetId"), S("BetType"), S("Currency"), simulated, S("Status"),
                 N("Matched"), N("Unmatched"), N("AvgPrice"), N("ProfitLoss"), J.Time(S("PlacedDate")), settled);
             if (bet.Matched < 0 || bet.Unmatched < 0 || string.IsNullOrWhiteSpace(bet.Id)) throw new InvalidDataException("Registro de apuesta incoherente.");
             bets.Add(bet);
