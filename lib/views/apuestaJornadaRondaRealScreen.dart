@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:plantillalogin/core/roundAuthorization.dart';
 import 'package:plantillalogin/core/roundBetting.dart';
 import 'package:plantillalogin/core/liveRoundRestart.dart';
@@ -62,6 +63,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
   bool busy = false, confirmed = false;
   String? error;
   String? replacingRequestId;
+  Map<String, dynamic>? lastAttempt;
   DocumentReference<Map<String, dynamic>> get command => FirebaseFirestore
       .instance
       .collection('PuenteJornadaRonda128Real')
@@ -312,7 +314,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             'archivedAt': FieldValue.serverTimestamp(),
           });
         }
-        tx.set(target, {
+        final nextAuthorization = <String, dynamic>{
           'schema': 1,
           'mode': 'live-round-128-v1',
           'requestId': id,
@@ -335,7 +337,14 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           'schedule': schedule,
           'legs': payload,
           'baselineFinishedIds': baseline.toList(),
-        });
+        };
+        lastAttempt = {
+          'previous': previous.data(),
+          'state': previousState.data(),
+          'next': nextAuthorization,
+          'archivePath': archive?.path,
+        };
+        tx.set(target, nextAuthorization);
       });
       if (mounted) setState(() => replacingRequestId = null);
     } on FirebaseException catch (e) {
@@ -350,6 +359,87 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => error = '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  // Sólo lecturas de servidor: nunca autoriza, revoca ni modifica documentos.
+  Future<void> copyDiagnostic() async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null)
+        throw StateError('Inicia sesión para leer el diagnóstico.');
+      final db = FirebaseFirestore.instance;
+      final report = <String, dynamic>{
+        'diagnosticVersion': '0.7.5',
+        'projectId': db.app.options.projectId,
+        'uid': uid,
+        'scope': widget.scope,
+        'lastError': error,
+        'lastAttempt': lastAttempt,
+        'documents': <String, dynamic>{},
+      };
+      final documents = report['documents'] as Map<String, dynamic>;
+      Map<String, dynamic>? previous;
+      for (final path in [
+        'AccesoApuestaJornada/$uid',
+        'PuenteJornadaRonda128Real/$uid',
+        'PuenteJornadaRonda128Real/$uid/Estado/actual',
+      ]) {
+        try {
+          final snapshot = await db
+              .doc(path)
+              .get(const GetOptions(source: Source.server));
+          documents[path] = {
+            'exists': snapshot.exists,
+            'data': snapshot.data(),
+          };
+          if (path == 'PuenteJornadaRonda128Real/$uid')
+            previous = snapshot.data();
+        } on FirebaseException catch (e) {
+          documents[path] = {'error': e.code, 'message': e.message};
+        }
+      }
+      final requestId = previous?['requestId'];
+      if (requestId is String &&
+          RegExp(r'^[a-f0-9]{32}$').hasMatch(requestId)) {
+        final path = 'PuenteJornadaRonda128Real/$uid/Archivo/$requestId';
+        try {
+          final snapshot = await db
+              .doc(path)
+              .get(const GetOptions(source: Source.server));
+          documents[path] = {
+            'exists': snapshot.exists,
+            'data': snapshot.data(),
+          };
+        } on FirebaseException catch (e) {
+          documents[path] = {'error': e.code, 'message': e.message};
+        }
+      }
+      final encoded = JsonEncoder.withIndent('  ', (value) {
+        if (value is Timestamp)
+          return {
+            'timestampSeconds': value.seconds,
+            'timestampNanoseconds': value.nanoseconds,
+          };
+        if (value is FieldValue) return {'serverTimestamp': true};
+        return value.toString();
+      }).convert(report);
+      await Clipboard.setData(ClipboardData(text: encoded));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Diagnóstico copiado. Pégalo en el chat. Sólo se han leído datos.',
+            ),
+          ),
+        );
+    } catch (e) {
+      if (mounted)
+        setState(() => error = 'No se pudo copiar el diagnóstico: $e');
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -426,7 +516,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const Text(
-          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Diagnóstico 0.7.4.',
+          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Diagnóstico 0.7.5.',
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
@@ -605,8 +695,13 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             );
           },
         ),
-        if (error != null)
+        if (error != null) ...[
           Text(error!, style: const TextStyle(color: Colors.red)),
+          TextButton(
+            onPressed: busy ? null : copyDiagnostic,
+            child: const Text('Copiar diagnóstico · sólo lectura'),
+          ),
+        ],
       ],
     ),
   );
