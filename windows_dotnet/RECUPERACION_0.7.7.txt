@@ -1,0 +1,41 @@
+APUESTA JORNADA WINDOWS 0.7.7 — RECUPERACIÓN EXPLÍCITA
+
+Esta versión no reactiva una ronda por instalarla. Conserva importes, pérdidas,
+BetId, reservas y copias de auditoría. No se reinicia la progresión desde 1 EUR.
+
+PASOS
+1. Pausa Empates jornada max128 EUR en BF Bot y detén la versión anterior de Windows.
+2. En tu proyecto flutter2 actualiza el código y publica únicamente las reglas:
+   git pull origin main
+   firebase.cmd deploy --only firestore:rules --project login-d2344
+   Reinicia la ejecución móvil con flutter run. Debe mostrar Recuperación 0.7.7.
+3. Extrae este ZIP en una carpeta nueva y abre ApuestaJornada.exe (0.7.7).
+   Por defecto selecciona Ronda y Sólo comprobar historial. Comprueba la ruta
+   del historial activo y el archivo EmpatesJornada_Ronda128.gz incluido.
+4. Conecta con tu cuenta de la app. Pulsa Conciliar revisión · sin enviar apuestas.
+   Acepta el aviso. Se hacen dos lecturas del historial separadas por 16 segundos.
+   Sólo pérdidas completas, liquidadas, coherentes y estables pueden conciliarse.
+5. Tras review_reconciled, abre en el móvil la misma jornada. Pulsa Revisar partidos
+   futuros · conservar pérdida. Elige los partidos futuros, revisa sus IDs, pérdida
+   acumulada e importes y confirma un nuevo OK. Tras perder 1 EUR, el siguiente es
+   2 EUR. No se amplía el límite acumulado de 255 EUR ni el máximo individual 128 EUR.
+6. Con Windows todavía en sólo comprobación, verifica que reconoce el nuevo OK
+   y conserva la primera apuesta. El CSV anterior se copia a recovery-audit y se
+   retira del nombre activo; el recibo anterior también queda respaldado.
+   Se requiere habilitar de nuevo los envíos de forma expresa para operar.
+
+No elimines recibos, CSV ni documentos de Firestore para desbloquear la ronda.
+Una liquidación parcial, ganancia, apuesta real pendiente, nuevo empate final,
+conflicto de BetId/estrategia/fecha, calendario no fiable o falta de recibo impiden
+la recuperación. La propuesta puede bloquearse hasta confirmar los resultados
+finales de todos los encuentros elegibles ya iniciados. No apuesta en directo.
+No hace falta importar otra estrategia en BF Bot ni cambiar la ruta de carga CSV.
+
+VALIDACIÓN
+203 comprobaciones .NET; 27 comprobaciones Dart del motor de preparación;
+179 comprobaciones de reglas, incluidas recuperaciones con 1 a 7 pérdidas,
+conservación de reservas/gasto y rechazos de reinicio o modificación de importes.
+Publicación Windows x64 autocontenida realizada desde Linux. No se ha ejecutado
+la interfaz WPF ni compilado Flutter aquí. El código Flutter ha pasado el formateador
+(parser) y sus comprobaciones Dart independientes; flutter run lo compila en tu PC.
+No se han enviado órdenes ni modificado tu cuenta durante estas pruebas.

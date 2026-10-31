@@ -63,6 +63,10 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
   bool busy = false, confirmed = false;
   String? error;
   String? replacingRequestId;
+  int carriedCount = 0;
+  List<dynamic> carriedLegs = [];
+  Map<String, dynamic>? recoveryPrevious;
+  String? recoveryFingerprint;
   Map<String, dynamic>? lastAttempt;
   DocumentReference<Map<String, dynamic>> get command => FirebaseFirestore
       .instance
@@ -139,9 +143,24 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         'Espera al final confirmado de los encuentros iniciados.',
       );
     }
+    if (carriedCount > 0) {
+      final previousBaseline =
+          (recoveryPrevious?['baselineFinishedIds'] as List?)?.toSet() ?? {};
+      if (data.any(
+        (m) => eligible(m) && m.draw && !previousBaseline.contains(m.id),
+      )) {
+        throw StateError(
+          'Hay un nuevo empate final en la jornada. No se prepara otra apuesta.',
+        );
+      }
+    }
     final legs = future(data).where((m) => selected.contains(m.id)).toList();
-    if (legs.isEmpty || legs.length != selected.length || legs.length > 8) {
-      throw StateError('Elige entre uno y ocho partidos futuros.');
+    if (legs.isEmpty ||
+        legs.length != selected.length ||
+        legs.length + carriedCount > 8) {
+      throw StateError(
+        'Elige entre uno y ${8 - carriedCount} partidos futuros; se conservan las apuestas anteriores.',
+      );
     }
     for (var i = 0; i < legs.length; i++) {
       final m = legs[i];
@@ -169,6 +188,20 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             legs.length) {
       throw StateError('Los identificadores de Betfair no pueden repetirse.');
     }
+    final allMarkets = [
+      ...carriedLegs.map((r) => (r as List)[4]),
+      ...legs.map((m) => markets[m.id]!.text.trim()),
+    ];
+    final allEvents = [
+      ...carriedLegs.map((r) => (r as List)[5]),
+      ...legs.map((m) => events[m.id]!.text.trim()),
+    ];
+    if (allMarkets.toSet().length != allMarkets.length ||
+        allEvents.toSet().length != allEvents.length) {
+      throw StateError(
+        'Un identificador de los partidos futuros repite una apuesta ya ejecutada.',
+      );
+    }
     return legs;
   }
 
@@ -184,7 +217,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       final legs = validate(fresh);
       final schedule = RoundAuthorization.fingerprint(fresh);
       final baseline = fresh.where((m) => m.hasResult).map((m) => m.id).toSet();
-      final payload = jsonEncode(
+      final futurePayload = jsonEncode(
         legs
             .map(
               (m) => [
@@ -198,6 +231,10 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
             )
             .toList(),
       );
+      final payload = jsonEncode([
+        ...carriedLegs,
+        ...(jsonDecode(futurePayload) as List),
+      ]);
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) throw StateError('Inicia sesión de nuevo.');
       if (!mounted) return;
@@ -209,12 +246,12 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           ),
           content: SingleChildScrollView(
             child: Text(
-              '${widget.scope}\n\n${legs.asMap().entries.map((e) => '${1 << e.key} € · ${e.value.label}\n${e.value.kickoff!.toLocal()}\nMarketId ${markets[e.value.id]!.text.trim()} · EventId ${events[e.value.id]!.text.trim()}').join('\n\n')}\n\n'
+              '${widget.scope}\n${carriedCount > 0 ? 'Pérdida conservada: ${((1 << carriedCount) - 1)} €. Ya ejecutadas: $carriedCount. No se reinicia la progresión.\n' : ''}\n${legs.asMap().entries.map((e) => '${1 << (carriedCount + e.key)} € · ${e.value.label}\n${e.value.kickoff!.toLocal()}\nMarketId ${markets[e.value.id]!.text.trim()} · EventId ${events[e.value.id]!.text.trim()}').join('\n\n')}\n\n'
               'BACK al empate · cuotas 2,80–20. Máximo ocho apuestas: 1 → 2 → 4 → 8 → 16 → 32 → 64 → 128 €. '
-              'Máximo por apuesta: 128 €. Pérdida acumulada máxima: 255 €. Se para al aparecer un nuevo empate final o al ganar. '
+              'Máximo por apuesta: 128 €. Pérdida acumulada máxima, incluidas las anteriores: 255 €. Se para al aparecer un nuevo empate final o al ganar. '
               'Sólo se duplica tras una derrota completamente liquidada. Si no llega la liquidación a tiempo, se detiene. '
               'Se excluyen Real Madrid, Barcelona y Atlético de Madrid. Los finales ya existentes quedan fuera del nuevo inicio. '
-              'El lunes continúa la misma jornada y el mismo presupuesto. Este OK es independiente del piloto de 1 €.',
+              'Este nuevo OK sólo autoriza los próximos partidos listados; las ventanas ya perdidas quedan fuera de esta propuesta. El lunes continúa la misma jornada y el mismo presupuesto. Este OK es independiente del piloto de 1 €.',
             ),
           ),
           actions: [
@@ -283,9 +320,20 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         if (previous.exists) {
           final old = previous.data()!, state = previousState.data();
           if (replacingRequestId != old['requestId'] ||
-              !canReplaceUnusedLiveRound(old, state)) {
+              !(carriedCount == 0
+                  ? canReplaceUnusedLiveRound(old, state)
+                  : canResumeReviewedLiveRound(old, state) &&
+                        old['scope'] == widget.scope &&
+                        state?['reservedCount'] == carriedCount &&
+                        state?['fingerprint'] == recoveryFingerprint &&
+                        jsonEncode(
+                              (jsonDecode(old['legs'] as String) as List)
+                                  .take(carriedCount)
+                                  .toList(),
+                            ) ==
+                            jsonEncode(carriedLegs))) {
             throw StateError(
-              'Sólo puede sustituirse una ronda terminada sin ninguna orden reservada.',
+              'La ronda debe estar terminada sin órdenes o conciliada por el PC, conservando las pérdidas.',
             );
           }
           // No hace falta leer un archivo inexistente. La regla create-only
@@ -337,6 +385,12 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           'schedule': schedule,
           'legs': payload,
           'baselineFinishedIds': baseline.toList(),
+          if (carriedCount > 0) ...{
+            'resumeFromRequestId': replacingRequestId,
+            'resumeFromFingerprint': recoveryFingerprint,
+            'carriedCount': carriedCount,
+            'carriedSpentCents': 100 * ((1 << carriedCount) - 1),
+          },
         };
         lastAttempt = {
           'previous': previous.data(),
@@ -374,7 +428,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         throw StateError('Inicia sesión para leer el diagnóstico.');
       final db = FirebaseFirestore.instance;
       final report = <String, dynamic>{
-        'diagnosticVersion': '0.7.5',
+        'diagnosticVersion': '0.7.7',
         'projectId': db.app.options.projectId,
         'uid': uid,
         'scope': widget.scope,
@@ -445,10 +499,25 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
     }
   }
 
-  Future<void> prepareRemaining(Map<String, dynamic> previous) async {
+  Future<void> prepareRemaining(
+    Map<String, dynamic> previous, [
+    Map<String, dynamic>? settledState,
+  ]) async {
     await reload();
     if (!mounted || error != null) return;
     try {
+      final recovering = settledState != null;
+      if (recovering &&
+          (previous['scope'] != widget.scope ||
+              !canResumeReviewedLiveRound(previous, settledState))) {
+        throw StateError(
+          'La recuperación exige la misma jornada y las pérdidas conciliadas por el PC.',
+        );
+      }
+      final count = recovering ? settledState!['reservedCount'] as int : 0;
+      final prefix = (jsonDecode(previous['legs'] as String) as List)
+          .take(count)
+          .toList();
       // Conserva sólo identificadores del mismo partido y de la misma jornada.
       if (previous['scope'] == widget.scope) {
         final rows = jsonDecode(previous['legs'] as String) as List;
@@ -465,6 +534,12 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
       }
       setState(() {
         replacingRequestId = previous['requestId'] as String;
+        carriedCount = count;
+        carriedLegs = prefix;
+        recoveryPrevious = recovering ? previous : null;
+        recoveryFingerprint = recovering
+            ? settledState!['fingerprint'] as String
+            : null;
         confirmed = false;
       });
     } catch (e) {
@@ -516,7 +591,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const Text(
-          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Diagnóstico 0.7.5.',
+          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Recuperación 0.7.7.',
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
@@ -588,6 +663,15 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                                 'Preparar nueva ronda desde 1 € · partidos restantes',
                               ),
                             ),
+                          if (canResumeReviewedLiveRound(d, s))
+                            FilledButton(
+                              onPressed: busy
+                                  ? null
+                                  : () => prepareRemaining(d, s),
+                              child: Text(
+                                'Revisar partidos futuros · conservar pérdida · siguiente ${1 << (s!['reservedCount'] as int)} €',
+                              ),
+                            ),
                           ...orders.map(
                             (o) => ListTile(
                               title: Text(
@@ -616,13 +700,21 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (replacingRequestId != null) ...[
-                  const Text(
-                    'La ronda anterior no reservó apuestas. Se conservará en el historial al confirmar el nuevo OK. Empiezas desde 1 €.',
+                  Text(
+                    carriedCount > 0
+                        ? 'Se conservan $carriedCount apuestas y ${((1 << carriedCount) - 1)} € perdidos. Próximo importe: ${1 << carriedCount} €. El límite de 255 € incluye lo anterior. Revisa y confirma un nuevo OK.'
+                        : 'La ronda anterior no reservó apuestas. Se conservará en el historial al confirmar el nuevo OK. Empiezas desde 1 €.',
                   ),
                   TextButton(
                     onPressed: busy
                         ? null
-                        : () => setState(() => replacingRequestId = null),
+                        : () => setState(() {
+                            replacingRequestId = null;
+                            carriedCount = 0;
+                            carriedLegs = [];
+                            recoveryPrevious = null;
+                            recoveryFingerprint = null;
+                          }),
                     child: const Text('Cancelar preparación'),
                   ),
                 ],
@@ -641,7 +733,8 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                         onChanged: busy
                             ? null
                             : (v) => setState(() {
-                                if (v == true && selected.length < 8) {
+                                if (v == true &&
+                                    selected.length + carriedCount < 8) {
                                   selected.add(m.id);
                                 } else {
                                   selected.remove(m.id);

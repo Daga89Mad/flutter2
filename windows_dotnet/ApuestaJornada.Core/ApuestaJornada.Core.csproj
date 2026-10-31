@@ -3,8 +3,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <FileVersion>0.7.6.0</FileVersion>
-    <InformationalVersion>0.7.6-pending-match</InformationalVersion>
+    <FileVersion>0.7.7.0</FileVersion>
+    <InformationalVersion>0.7.7-review-recovery</InformationalVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>

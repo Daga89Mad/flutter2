@@ -10,11 +10,23 @@ public sealed record RoundLeg(string MatchId, string Home, string Away, DateTime
 public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Approved, DateTimeOffset Expires,
     string Schedule, HashSet<string> Baseline, List<RoundLeg> Legs, string Fingerprint)
 {
+    public int CarriedCount { get; init; }
+    public string? ResumeFromRequestId { get; init; }
+    public string? ResumeFromFingerprint { get; init; }
+    public int CarriedSpentCents => 100 * ((1 << CarriedCount) - 1);
     public const string Provider = "EmpatesJornadaRonda128", Strategy = "Empates jornada max128 EUR";
     public static LiveRoundCommand Parse(JsonObject d)
     {
         var scope = J.Text(d["scope"]); var id = J.Text(d["requestId"]);
         var approved = J.Time(d["approvedAt"]); var expires = J.Time(d["expiresAt"]);
+        var carried = d["carriedCount"] is null ? 0 : J.Int(d["carriedCount"]);
+        var resumeId = J.Optional(d["resumeFromRequestId"]);
+        var resumeFingerprint = J.Optional(d["resumeFromFingerprint"]);
+        if (carried == 0 ? new[] { "carriedCount", "carriedSpentCents", "resumeFromRequestId", "resumeFromFingerprint" }.Any(d.ContainsKey)
+            : carried is < 1 or > 7 || J.Int(d["carriedSpentCents"]) != 100 * ((1 << carried) - 1) ||
+              resumeId is null || !Regex.IsMatch(resumeId, "^[a-f0-9]{32}$") || resumeId == id ||
+              resumeFingerprint is null || !Regex.IsMatch(resumeFingerprint, "^[A-F0-9]{64}$"))
+            throw new InvalidDataException("Recuperación inválida: faltan la ronda anterior y sus importes conservados.");
         if (J.Int(d["schema"]) != 1 || J.Text(d["mode"]) != "live-round-128-v1" ||
             !Regex.IsMatch(id, "^[a-f0-9]{32}$") || !Regex.IsMatch(scope, @"^LaLiga/\d{4}-\d{4}/([1-9]|[12]\d|3[0-8])$") ||
             J.Text(d["currency"]) != "EUR" || J.Int(d["budgetCents"]) != 25500 || J.Int(d["maxBets"]) != 8 || J.Int(d["maxStakeCents"]) != 12800 ||
@@ -28,11 +40,12 @@ public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Ap
             if (r.Count != 6) throw new InvalidDataException("Partido incompleto.");
             return new RoundLeg(J.Text(r[0]), J.Text(r[1]), J.Text(r[2]), J.Time(r[3]), J.Text(r[4]), J.Text(r[5]));
         }).ToList();
-        if (legs.Count is < 1 or > 8 || legs.Select(l => l.MatchId).Distinct().Count() != legs.Count ||
+        if (legs.Count is < 1 or > 8 || carried >= legs.Count || legs.Select(l => l.MatchId).Distinct().Count() != legs.Count ||
             legs.Select(l => l.MarketId).Distinct().Count() != legs.Count || legs.Select(l => l.EventId).Distinct().Count() != legs.Count ||
             legs.Any(l => string.IsNullOrWhiteSpace(l.MatchId) || string.IsNullOrWhiteSpace(l.Home) || string.IsNullOrWhiteSpace(l.Away) ||
                 ExcludedTeams.IsExcludedFixture(l.Home, l.Away) || !Regex.IsMatch(l.MarketId, @"^1\.\d{6,12}$") ||
-                !Regex.IsMatch(l.EventId, @"^[1-9]\d{3,15}$") || l.Kickoff <= approved.AddSeconds(60)) ||
+                !Regex.IsMatch(l.EventId, @"^[1-9]\d{3,15}$")) ||
+            legs.Skip(carried).Any(l => l.Kickoff <= approved.AddSeconds(60)) || legs.Take(carried).Any(l => l.Kickoff >= approved) ||
             legs.Zip(legs.Skip(1)).Any(p => p.Second.Kickoff - p.First.Kickoff < TimeSpan.FromMinutes(120)) ||
             expires != legs[^1].Kickoff.AddSeconds(-60) || expires - approved > TimeSpan.FromDays(4))
             throw new InvalidDataException("Revisa equipos, IDs, orden, solapamientos o caducidad de la prueba.");
@@ -41,11 +54,12 @@ public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Ap
             throw new InvalidDataException("Temporada inválida.");
         var baselineRows = d["baselineFinishedIds"] as JsonArray ?? throw new InvalidDataException("Falta punto de inicio.");
         var baseline = baselineRows.Select(J.Text).ToHashSet(StringComparer.Ordinal);
-        if (baseline.Count != baselineRows.Count || baseline.Count > 9 || legs.Any(l => baseline.Contains(l.MatchId)))
+        if (baseline.Count != baselineRows.Count || baseline.Count > 9 || legs.Skip(carried).Any(l => baseline.Contains(l.MatchId)))
             throw new InvalidDataException("Punto de inicio inválido.");
         var immutable = d.DeepClone().AsObject(); immutable.Remove("action"); immutable.Remove("updatedAt");
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(J.Canonical(immutable))));
-        var command = new LiveRoundCommand(id, scope, approved, expires, J.Text(d["schedule"]), baseline, legs, hash);
+        var command = new LiveRoundCommand(id, scope, approved, expires, J.Text(d["schedule"]), baseline, legs, hash)
+        { CarriedCount = carried, ResumeFromRequestId = resumeId, ResumeFromFingerprint = resumeFingerprint };
         command.CheckSchedule(command.Expected());
         return command;
     }
@@ -75,7 +89,7 @@ public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Ap
     }
 }
 
-public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provider, string agentId, string folder,
+public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvider provider, string agentId, string folder,
     string strategyPath, string historyPath, bool readOnly = true, string? legacyPilotPath = null, Func<DateTimeOffset>? clock = null)
 {
     private DateTimeOffset Now => clock?.Invoke() ?? DateTimeOffset.UtcNow;
@@ -88,12 +102,12 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         { f.Write(Encoding.UTF8.GetBytes(state.ToJsonString())); f.Flush(true); }
         File.Move(tmp, ReceiptPath, true);
     }
-    private async Task CheckLegacy(List<BfBet> history, CancellationToken ct)
+    private async Task CheckLegacy(List<BfBet> history, CancellationToken ct, bool priorRoundProven = false)
     {
         if (legacyPilotPath is null) return;
         var pilot = await client.GetAsync(legacyPilotPath, ct);
         var oldState = await client.GetAsync(legacyPilotPath + "/Estado/actual", ct);
-        if (pilot is not null && (J.Optional(pilot.Data["action"]) == "authorize" || J.Bool(oldState?.Data["dispatchReserved"])))
+        if (!priorRoundProven && pilot is not null && (J.Optional(pilot.Data["action"]) == "authorize" || J.Bool(oldState?.Data["dispatchReserved"])))
         {
             var matching = history.Where(b => !b.Simulated && b.Currency == "EUR" && b.Type == "BACK" &&
                 b.MarketId == J.Text(pilot.Data["marketId"]) && b.SelectionId == "58805" &&
@@ -146,6 +160,13 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         var c = LiveRoundCommand.Parse(command.Data);
         if (J.Text(state["requestId"]) is { Length: > 0 } previous && previous != c.Id)
         {
+            if (c.CarriedCount > 0)
+            {
+                state = await AdoptRecoveryAsync(c, state, ct);
+                await Save("checking", "Nuevo OK recibido: se conservan las apuestas liquidadas y su pérdida. Sin reinicio de importes.");
+            }
+            else
+            {
             // Sólo se rearma una ronda que nunca reservó ni publicó una orden.
             var archive = await client.GetAsync(client.CommandPath + "/Archivo/" + previous, ct);
             if (archive is null) throw new InvalidDataException("Falta el archivo permanente de la ronda anterior.");
@@ -167,7 +188,9 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
                 ["terminal"] = false, ["spentCents"] = 0, ["agentId"] = agentId,
                 ["lastSeenAt"] = J.Iso(Now), ["leaseUntil"] = J.Iso(Now.AddSeconds(60)) };
             await Save("checking", "Nuevo OK recibido; ronda anterior archivada sin órdenes. Comprobando partidos restantes.");
+            }
         }
+        if (c.CarriedCount > 0) await VerifyRecoveryLinkAsync(c, state, ct);
         if (J.Text(state["fingerprint"]) is { Length: > 0 } fingerprint && fingerprint != c.Fingerprint)
             throw new InvalidDataException("La autorización cambió sin un nuevo OK válido.");
         state["requestId"] = c.Id; state["fingerprint"] = c.Fingerprint;
@@ -197,6 +220,15 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
             if (J.Text(order["marketId"]) != leg.MarketId || J.Int(order["cents"]) != cents || J.Text(order["matchId"]) != leg.MatchId)
                 throw new InvalidDataException("La reserva no coincide con el OK.");
             spent += cents;
+            if (i < c.CarriedCount)
+            {
+                ValidateSettledLoss(order, i);
+                var historical = history.Where(b => b.Id == J.Text(order["betId"]) && !b.Simulated).ToList();
+                if (historical.Count > 1 || (historical.Count == 1 && !SameSettledLoss(historical[0], order, leg, i)))
+                    return await Save("review", "Cambió una liquidación conservada. No se continúa.", true);
+                evidence.Add($"{J.Text(order["betId"])}|SETTLED|{cents}|{J.Text(order["settledAt"])}");
+                continue;
+            }
             var matching = history.Where(b => b.MarketId == leg.MarketId && b.SelectionId == "58805" && !b.Simulated &&
                 b.Type == "BACK" && b.Currency == "EUR" && b.StrategyName == LiveRoundCommand.Strategy &&
                 b.Tipster.Equals(LiveRoundCommand.Provider, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -262,7 +294,7 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
         var unresolved = fixtures.Any(f => !ExcludedTeams.IsExcludedFixture(f) && !f.Final && !f.Unavailable &&
             (f.Kickoff is null || f.Kickoff <= Now));
         if (unresolved) return await Save("waiting_results", "Hay un partido iniciado sin final confirmado. No se envía otra apuesta.");
-        await CheckLegacy(history, ct);
+        await CheckLegacy(history, ct, c.CarriedCount > 0);
         if (history.Any(b => !b.Simulated && (b.Tipster.Equals(LiveRoundCommand.Provider, StringComparison.OrdinalIgnoreCase) ||
             b.Tipster.Equals("EmpatesJornada", StringComparison.OrdinalIgnoreCase)) && !b.Terminal))
             return await Save("review", "Hay apuestas anteriores pendientes de conciliar.", true);

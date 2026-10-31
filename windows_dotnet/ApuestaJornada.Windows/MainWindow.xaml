@@ -1,5 +1,5 @@
 <Window x:Class="ApuestaJornada.Windows.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
- Title="Apuesta a jornada · Windows · 0.7.6" Width="850" Height="720" MinWidth="650" MinHeight="560" Background="#F3F5F9" FontFamily="Segoe UI" FontSize="14" Closing="OnClosing">
+ Title="Apuesta a jornada · Windows · 0.7.7" Width="850" Height="720" MinWidth="650" MinHeight="560" Background="#F3F5F9" FontFamily="Segoe UI" FontSize="14" Closing="OnClosing">
  <ScrollViewer VerticalScrollBarVisibility="Auto">
  <StackPanel Margin="28">
   <TextBlock TextWrapping="Wrap" Text="Apuesta a jornada" FontSize="28" FontWeight="Bold" Foreground="#172239"/>
@@ -36,6 +36,7 @@
     <TextBlock TextWrapping="Wrap" x:Name="Round" Foreground="#536078"/>
     <TextBox x:Name="Outbox" IsReadOnly="True" TextWrapping="Wrap" Margin="0,8,0,12"/>
     <TextBlock TextWrapping="Wrap" x:Name="LastSeen" Foreground="#536078" Margin="0,4,0,12"/>
+    <Button x:Name="Reconcile" Content="Conciliar revisión · sin enviar apuestas" Click="Reconcile_Click" IsEnabled="False" HorizontalAlignment="Left" Margin="0,0,0,12"/>
     <ListView x:Name="History" Height="130">
      <ListView.View><GridView>
       <GridViewColumn Header="Partido" Width="370" DisplayMemberBinding="{Binding Match}"/>

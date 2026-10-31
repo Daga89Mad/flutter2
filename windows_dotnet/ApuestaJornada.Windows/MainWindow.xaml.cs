@@ -12,14 +12,16 @@ public partial class MainWindow : Window
     private CancellationTokenSource? cancellation;
     private Task? running;
     private bool closing, canClose;
+    private bool reconcileRequested;
     private bool liveMode, roundMode, readOnlyRound;
     private string historyFile = "";
     private string strategyFile = "";
     public MainWindow()
     {
         InitializeComponent();
+        RoundMode.IsChecked = true;
         HistoryPath.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "bfbotmanager.com", "Bf Bot Manager V3", "uk_bets_history.gz");
-        var bundled = Path.Combine(AppContext.BaseDirectory, "EmpatesJornada_PruebaReal.gz");
+        var bundled = Path.Combine(AppContext.BaseDirectory, "EmpatesJornada_Ronda128.gz");
         if (File.Exists(bundled)) StrategyPath.Text = bundled;
     }
 
@@ -96,7 +98,20 @@ public partial class MainWindow : Window
                     try
                     {
                         // Persistencia y JSON fuera del hilo de la interfaz.
-                        var state = await Task.Run(() => roundMode ? roundWorker.TickAsync(ct) : liveMode ? liveWorker.TickAsync(ct) : worker.TickAsync(ct), ct);
+                        JsonObject state;
+                        if (reconcileRequested && roundMode && readOnlyRound)
+                        {
+                            reconcileRequested = false; Reconcile.IsEnabled = false;
+                            Status.Text = "Comprobando liquidaciones; dos lecturas estables, sin envíos…";
+                            state = await Task.Run(() => roundWorker.ReconcileReviewAsync(ct), ct);
+                            if (J.Optional(state["status"]) == "review")
+                            {
+                                await Task.Delay(TimeSpan.FromSeconds(16), ct);
+                                state = await Task.Run(() => roundWorker.ReconcileReviewAsync(ct), ct);
+                            }
+                        }
+                        else state = await Task.Run(() => roundMode ? roundWorker.TickAsync(ct) : liveMode ? liveWorker.TickAsync(ct) : worker.TickAsync(ct), ct);
+                        Reconcile.IsEnabled = roundMode && readOnlyRound && J.Optional(state["status"]) == "review" && J.Bool(state["terminal"]);
                         Status.Text = J.Text(state["message"]);
                         LastSeen.Text = "Última confirmación: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
                         if (roundMode)
@@ -119,6 +134,8 @@ public partial class MainWindow : Window
                     catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                     catch (Exception error)
                     {
+                        reconcileRequested = false;
+                        Reconcile.IsEnabled = roundMode && readOnlyRound;
                         Status.Text = "En espera. No se envían nuevas órdenes: " + Friendly(error);
                         LastSeen.Text = "Sin confirmar un estado nuevo; comprueba conexión y permisos.";
                     }
@@ -136,8 +153,17 @@ public partial class MainWindow : Window
         TaskCanceledException => "El servidor tardó demasiado en responder.",
         _ => error.Message
     };
+    private void Reconcile_Click(object sender, RoutedEventArgs e)
+    {
+        if (running is null || running.IsCompleted || !roundMode || !readOnlyRound) return;
+        if (MessageBox.Show("Se comprobarán las apuestas ya reservadas en dos lecturas. Sólo pérdidas completas y liquidadas permitirán preparar un nuevo OK en el móvil, conservando el gasto y la progresión. No se publicarán órdenes. Mantén la estrategia de BF Bot pausada durante la recuperación.",
+            "Conciliar revisión sin enviar apuestas", MessageBoxButton.OKCancel, MessageBoxImage.Information) != MessageBoxResult.OK) return;
+        reconcileRequested = true; Reconcile.IsEnabled = false;
+        Status.Text = "Conciliación solicitada. Esperando al siguiente ciclo; no se envían órdenes.";
+    }
+
     private void Stop_Click(object sender, RoutedEventArgs e)
-    { cancellation?.Cancel(); Status.Text = "Deteniendo PC…"; Stop.IsEnabled = false; }
+    { reconcileRequested = false; Reconcile.IsEnabled = false; cancellation?.Cancel(); Status.Text = "Deteniendo PC…"; Stop.IsEnabled = false; }
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (canClose || running is null || running.IsCompleted) return;

@@ -211,6 +211,88 @@ static class RoundTests
         var resumed = await Worker(restartClient,"restart").TickAsync(default);
         Check(J.Text(resumed["status"]) == "exported" && File.ReadAllText(restartWorker.OutboxPath).Contains("\"1.00\""), "partido restante empieza en 1 EUR con nueva reserva");
         Check(J.Text((await Worker(restartClient,"restart").TickAsync(default))["status"]) == "awaiting_history", "reinicio tras rearme no duplica orden");
+        // Recuperación explícita: conserva la primera pérdida y requiere otro OK.
+        bets.Clear(); History(); time = start;
+        var recoverClient = new RoundClient(Raw(), Fixtures()); var recoverLive = Worker(recoverClient, "recovery");
+        await recoverLive.TickAsync(default);
+        time = start.AddHours(2);
+        bets.Add(HistoryBet(0, 0.5m, start, time, -0.5m)); History();
+        await recoverLive.TickAsync(default);
+        Check(J.Bool(recoverClient.State!.Data["terminal"]), "recuperación parte de revisión terminal, no de ronda activa");
+        var reconciler = Worker(recoverClient, "recovery", true);
+        await RejectAsync(() => reconciler.ReconcileReviewAsync(default), "no concilia pérdida parcial");
+        bets.Clear(); bets.Add(HistoryBet(0, 1, start, time, -1)); History();
+        recoverClient.Fixtures[0] = recoverClient.Fixtures[0] with { Finished = true, HomeGoals = 1, AwayGoals = 0 };
+        await RejectAsync(() => recoverLive.ReconcileReviewAsync(default), "conciliación sólo en modo sin envíos");
+        recoverClient.Fixtures[9] = recoverClient.Fixtures[9] with { Finished = true, HomeGoals = 1, AwayGoals = 1 };
+        await RejectAsync(() => reconciler.ReconcileReviewAsync(default), "nuevo empate final impide recuperar la ronda");
+        recoverClient.Fixtures[9] = recoverClient.Fixtures[9] with { Finished = false, HomeGoals = null, AwayGoals = null };
+        var firstRead = await reconciler.ReconcileReviewAsync(default);
+        Check(J.Text(firstRead["status"]) == "review" && J.Int(firstRead["spentCents"]) == 100, "primera lectura conserva pérdida y bloqueo");
+        time = time.AddSeconds(5);
+        Check(J.Text((await reconciler.ReconcileReviewAsync(default))["status"]) == "review", "conciliación no acepta dos lecturas demasiado próximas");
+        bets[0].Element("AvgPrice")!.Value = "3.5"; History();
+        Check(J.Text((await reconciler.ReconcileReviewAsync(default))["status"]) == "review", "una liquidación cambiada reinicia la espera de conciliación");
+        bets[0].Element("AvgPrice")!.Value = "4"; History();
+        await reconciler.ReconcileReviewAsync(default);
+        time = time.AddSeconds(16);
+        var reconciledReview = await reconciler.ReconcileReviewAsync(default);
+        Check(J.Text(reconciledReview["status"]) == "review_reconciled" && J.Bool(reconciledReview["terminal"]) && J.Int(reconciledReview["reservedCount"]) == 1,
+            "dos pérdidas estables cierran revisión sin reservar otra apuesta");
+        Check(J.Text(J.Object(reconciledReview["orders"]!.AsArray()[0])["betId"]) == "bet0", "cierre conserva BetId liquidado");
+        var closedOld = recoverClient.Command.Data.DeepClone().AsObject();
+        var oldFingerprint = J.Text(reconciledReview["fingerprint"]);
+        var recoveredState = reconciledReview.DeepClone().AsObject();
+        time = start.AddHours(4);
+        recoverClient.Fixtures[1] = recoverClient.Fixtures[1] with { Finished = true, HomeGoals = 1, AwayGoals = 0 };
+        var resumeOk = Raw(); var originalLegs = JsonNode.Parse(J.Text(resumeOk["legs"]))!.AsArray();
+        resumeOk["legs"] = new JsonArray(originalLegs.Where((_, i) => i != 1).Select(n => n!.DeepClone()).ToArray()).ToJsonString();
+        resumeOk["requestId"] = new string('b',32); resumeOk["approvedAt"] = J.Iso(time); resumeOk["updatedAt"] = J.Iso(time);
+        resumeOk["baselineFinishedIds"] = new JsonArray("0", "1");
+        resumeOk["resumeFromRequestId"] = J.Text(closedOld["requestId"]); resumeOk["resumeFromFingerprint"] = oldFingerprint;
+        resumeOk["carriedCount"] = 1; resumeOk["carriedSpentCents"] = 100;
+        var resumeCommand = LiveRoundCommand.Parse(resumeOk);
+        Check(resumeCommand.CarriedCount == 1 && resumeCommand.CarriedSpentCents == 100, "nuevo contrato conserva una apuesta y 1 EUR gastado");
+        var wrongAmount = resumeOk.DeepClone().AsObject(); wrongAmount["carriedSpentCents"] = 0;
+        Reject(() => LiveRoundCommand.Parse(wrongAmount), "nuevo OK no puede reiniciar gasto a cero");
+        recoverClient.Extra[recoverClient.CommandPath + "/Archivo/" + J.Text(closedOld["requestId"])] = new(new JsonObject
+            { ["authorization"] = closedOld.DeepClone(), ["state"] = recoveredState.DeepClone() }, "archive-recovery");
+        recoverClient.Command = new(resumeOk.DeepClone().AsObject(), "resume");
+        var wrongFingerprint = resumeOk.DeepClone().AsObject(); wrongFingerprint["resumeFromFingerprint"] = new string('F',64);
+        recoverClient.Command = new(wrongFingerprint, "bad-resume");
+        await RejectAsync(() => reconciler.TickAsync(default), "recuperación rechaza enlace a otra huella anterior");
+        recoverClient.Command = new(resumeOk.DeepClone().AsObject(), "resume");
+        var receiptRecoveryPath = Path.Combine(root,"recovery","round-receipt.json");
+        var originalRecoveryReceipt = File.ReadAllBytes(receiptRecoveryPath); File.Delete(receiptRecoveryPath);
+        await RejectAsync(() => reconciler.TickAsync(default), "recuperación rechaza recibo local ausente");
+        File.WriteAllBytes(receiptRecoveryPath, originalRecoveryReceipt);
+        var originalRecoveryCsv = File.ReadAllText(reconciler.OutboxPath); File.WriteAllText(reconciler.OutboxPath,"CSV desconocido");
+        await RejectAsync(() => reconciler.TickAsync(default), "recuperación rechaza CSV anterior ajeno a la reserva");
+        File.WriteAllText(reconciler.OutboxPath,originalRecoveryCsv);
+        var archiveKey = recoverClient.CommandPath + "/Archivo/" + J.Text(closedOld["requestId"]);
+        recoverClient.Extra[archiveKey].Data["state"]!["orders"]![0]!["profitLossCents"] = 0;
+        await RejectAsync(() => reconciler.TickAsync(default), "recuperación rechaza pérdida archivada manipulada");
+        recoverClient.Extra[archiveKey].Data["state"] = recoveredState.DeepClone();
+        await reconciler.TickAsync(default); time = time.AddSeconds(16);
+        var waitingRecovery = await reconciler.TickAsync(default);
+        Check(J.Int(waitingRecovery["reservedCount"]) == 1 && J.Int(waitingRecovery["spentCents"]) == 100 && !J.Bool(waitingRecovery["terminal"]),
+            "nuevo OK adopta reservas sin reducir gasto ni duplicar primera apuesta");
+        Check(!File.Exists(reconciler.OutboxPath) && Directory.GetFiles(Path.Combine(root,"recovery","recovery-audit")).Length >= 2,
+            "CSV anterior se conserva en auditoría y deja de estar activo");
+        time = start.AddHours(6);
+        var nextRecovered = await Worker(recoverClient, "recovery").TickAsync(default);
+        Check(J.Text(nextRecovered["status"]) == "exported" && J.Int(nextRecovered["reservedCount"]) == 2 && J.Int(nextRecovered["spentCents"]) == 300 &&
+            File.ReadAllText(reconciler.OutboxPath).Contains("\"2.00\""), "recuperación publica sólo nuevo partido autorizado a 2 EUR, total 3 EUR");
+        File.Delete(reconciler.OutboxPath);
+        Check(J.Text((await Worker(recoverClient, "recovery").TickAsync(default))["status"]) == "awaiting_history" && !File.Exists(reconciler.OutboxPath),
+            "reinicio de recuperación no repite segunda reserva");
+        bets.Clear(); bets.Add(HistoryBet(2, 2, time, time.AddHours(2), -2)); History();
+        time = time.AddHours(2); recoverClient.Fixtures[2] = recoverClient.Fixtures[2] with { Finished = true, HomeGoals = 1, AwayGoals = 0 };
+        Check(J.Text((await Worker(recoverClient,"recovery").TickAsync(default))["status"]) == "confirming",
+            "pérdida anterior archivada sigue contabilizada aunque BF ya no la incluya en el fichero activo");
+        time = time.AddSeconds(16);
+        Check(J.Text((await Worker(recoverClient,"recovery").TickAsync(default))["status"]) == "waiting" && J.Int(recoverClient.State!.Data["spentCents"]) == 300,
+            "tras recuperación mantiene pérdida acumulada y doble lectura antes del siguiente escalón");
         Directory.Delete(root, true);
         return checks;
     }

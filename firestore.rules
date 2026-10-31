@@ -387,8 +387,13 @@ service cloud.firestore {
 
     // Ronda REAL independiente: una autorización por cuenta, máximo ocho reservas, 128 EUR por apuesta y 255 EUR acumulados.
     function validLiveRound128(d) {
-      return d.keys().hasOnly(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds'])
+      return d.keys().hasOnly(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds','resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents'])
         && d.keys().hasAll(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds'])
+        && ((!d.keys().hasAny(['resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents'])) || (d.keys().hasAll(['resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents'])
+          && d.resumeFromRequestId is string && d.resumeFromRequestId.matches('^[a-f0-9]{32}$')
+          && d.resumeFromRequestId != d.requestId && d.resumeFromFingerprint is string && d.resumeFromFingerprint.matches('^[A-F0-9]{64}$')
+          && d.carriedCount is int && d.carriedCount >= 1 && d.carriedCount <= 7
+          && d.carriedSpentCents == [0,100,300,700,1500,3100,6300,12700][d.carriedCount]))
         && d.schema == 1 && d.mode == 'live-round-128-v1' && d.action == 'authorize'
         && d.requestId is string && d.requestId.matches('^[a-f0-9]{32}$')
         && d.scope is string && d.scope.matches('^LaLiga/[0-9]{4}-[0-9]{4}/([1-9]|[12][0-9]|3[0-8])$')
@@ -408,6 +413,31 @@ service cloud.firestore {
         return d.terminal == true && d.reservedCount == 0 && d.orders == []
           && d.get('spentCents', 0) == 0 && d.status in ['stopped', 'revoked', 'completed'];
       }
+      function settledLoss(o, cents) {
+        // Los límites financieros se comprueban aquí para cada escalón.
+        // El agente valida además BetId, estrategia, fechas y cuota antes de guardar la evidencia estable.
+        return o.status == 'SETTLED' && o.cents == cents && o.matchedCents == cents && o.profitLossCents == -cents;
+      }
+      function closedLoss(d) {
+        let count = d.reservedCount;
+        let orders = d.orders;
+        return d.terminal == true && d.status == 'review_reconciled'
+          && count is int && count >= 1 && count <= 7 && orders.size() == count
+          && d.spentCents == [0,100,300,700,1500,3100,6300,12700][count]
+          && d.evidence is string && d.evidence.matches('^recovery:[A-F0-9]{64}$')
+          && settledLoss(orders[0],100)
+          && (count < 2 || settledLoss(orders[1],200))
+          && (count < 3 || settledLoss(orders[2],400))
+          && (count < 4 || settledLoss(orders[3],800))
+          && (count < 5 || settledLoss(orders[4],1600))
+          && (count < 6 || settledLoss(orders[5],3200))
+          && (count < 7 || settledLoss(orders[6],6400));
+      }
+      function carriesPrevious(next, before, state) {
+        return next.scope == before.scope
+          && next.resumeFromRequestId == before.requestId && next.resumeFromFingerprint == state.fingerprint
+          && next.carriedCount == state.reservedCount && next.carriedSpentCents == state.spentCents;
+      }
       function previousState() {
         return get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Estado/actual).data;
       }
@@ -415,31 +445,38 @@ service cloud.firestore {
         return getAfter(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Archivo/$(id)).data;
       }
       allow read: if isOwner(uid) && jornadaAutorizada();
-      allow create: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data);
+      allow create: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data)
+        && !request.resource.data.keys().hasAny(['carriedCount']);
       allow update: if isOwner(uid) && request.resource.data.action == 'revoke'
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action','updatedAt']);
-      // Nuevo OK sólo cuando la ronda anterior nunca reservó órdenes.
-      // El mismo lote debe conservar íntegros el OK y su estado anterior.
-      allow update: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data)
-        && request.resource.data.requestId != resource.data.requestId
-        && !exists(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Archivo/$(request.resource.data.requestId))
-        && request.resource.data.approvedAt > resource.data.approvedAt
-        && previousState().requestId == resource.data.requestId && emptyTerminal(previousState())
-        && archived(resource.data.requestId).authorization == resource.data
-        && archived(resource.data.requestId).state == previousState()
-        && archived(resource.data.requestId).archivedAt == request.time;
+      // El lote conserva el OK y el estado íntegros; los importes nunca vuelven a cero.
+      function replacingAuthorization() {
+        let before = resource.data;
+        let next = request.resource.data;
+        let state = previousState();
+        let archive = archived(before.requestId);
+        return validLiveRound128(next) && next.requestId != before.requestId
+          && !exists(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Archivo/$(next.requestId))
+          && next.approvedAt > before.approvedAt && state.requestId == before.requestId
+          && ((emptyTerminal(state) && !next.keys().hasAny(['carriedCount']))
+            || (closedLoss(state) && carriesPrevious(next,before,state)))
+          && archive.authorization == before && archive.state == state && archive.archivedAt == request.time;
+      }
+      allow update: if isOwner(uid) && jornadaAutorizada() && replacingAuthorization();
       match /Archivo/{id} {
         allow read: if isOwner(uid) && jornadaAutorizada();
-        allow create: if isOwner(uid) && jornadaAutorizada()
-          && request.resource.data.keys().hasAll(['authorization','state','archivedAt'])
-          && request.resource.data.keys().hasOnly(['authorization','state','archivedAt'])
-          && request.resource.data.archivedAt == request.time
-          && request.resource.data.authorization == get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data
-          && request.resource.data.authorization.requestId == id
-          && request.resource.data.state == previousState()
-          && request.resource.data.state.requestId == id && emptyTerminal(request.resource.data.state)
-          && getAfter(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data.requestId != id;
+        function creatingArchive() {
+          let data = request.resource.data;
+          let before = get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data;
+          let after = getAfter(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data;
+          let state = previousState();
+          return data.keys().hasAll(['authorization','state','archivedAt'])
+            && data.keys().hasOnly(['authorization','state','archivedAt']) && data.archivedAt == request.time
+            && data.authorization == before && before.requestId == id && data.state == state && state.requestId == id
+            && (emptyTerminal(state) || (closedLoss(state) && carriesPrevious(after,before,state))) && after.requestId != id;
+        }
+        allow create: if isOwner(uid) && jornadaAutorizada() && creatingArchive();
         allow update, delete: if false;
       }
       allow delete: if false;
@@ -474,6 +511,23 @@ service cloud.firestore {
           && request.resource.data.requestId == get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data.requestId
           && request.resource.data.reservedCount == 0 && request.resource.data.orders == []
           && request.resource.data.get('spentCents', 0) == 0 && request.resource.data.terminal == false;
+        function continuesRecovery() {
+          let before = resource.data;
+          let next = request.resource.data;
+          let archive = archived(before.requestId);
+          let command = get(/databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)).data;
+          // El archivo inmutable ya pasó closedLoss al crearse en el lote del nuevo OK.
+          return before.terminal == true && before.status == 'review_reconciled'
+            && archive.state.status == 'review_reconciled' && archive.state.terminal == true
+            && archive.state.orders == before.orders && archive.state.evidence == before.evidence
+            && archive.state.fingerprint == before.fingerprint && archive.state.reservedCount == before.reservedCount
+            && archive.state.spentCents == before.spentCents
+            && carriesPrevious(command, archive.authorization, before)
+            && next.requestId != before.requestId && next.requestId == command.requestId
+            && next.reservedCount == before.reservedCount && next.orders == before.orders
+            && next.spentCents == before.spentCents && next.terminal == false;
+        }
+        allow update: if isOwner(uid) && jornadaAutorizada() && validState(request.resource.data) && continuesRecovery();
         allow delete: if false;
       }
     }

@@ -198,6 +198,62 @@ try {
  await no(setDoc(round128State,{...rs128,requestId:round128.requestId}));
  await ok(updateDoc(round128State,{reservedCount:1,orders:[{cents:100}],spentCents:100}));
  await no(updateDoc(round128State,{reservedCount:0,orders:[],spentCents:0}));
+ // Recuperación con pérdidas: archivo atómico y continuidad de gasto/reservas.
+ const recoveryDb=env.authenticatedContext('recovery').firestore();
+ const recoveryRef=doc(recoveryDb,'PuenteJornadaRonda128Real/recovery');
+ const recoveryStateRef=doc(recoveryDb,'PuenteJornadaRonda128Real/recovery/Estado/actual');
+ const recoveryArchive=doc(recoveryDb,`PuenteJornadaRonda128Real/recovery/Archivo/${'1'.repeat(32)}`);
+ const oldRecovery={...round128,requestId:'1'.repeat(32),approvedAt:Timestamp.fromMillis(Date.now()-10000),updatedAt:Timestamp.fromMillis(Date.now()-10000)};
+ const lossOrders=[{matchId:'one',marketId:'1.300000001',cents:100,matchedCents:100,profitLossCents:-100,
+   status:'SETTLED',betId:'real-bet',strategyId:'round-strategy',odds:3.25,reservedAt:'2026-10-31T15:10:08Z',settledAt:'2026-10-31T17:13:28Z'}];
+ const closedRecovery={...rs128,requestId:oldRecovery.requestId,fingerprint:'A'.repeat(64),terminal:true,status:'review_reconciled',
+   reservedCount:1,orders:lossOrders,spentCents:100,evidence:`recovery:${'B'.repeat(64)}`,evidenceAt:Timestamp.now()};
+ await env.withSecurityRulesDisabled(async ctx=>{
+   await setDoc(doc(ctx.firestore(),'AccesoApuestaJornada/recovery'),{activo:true});
+   await setDoc(doc(ctx.firestore(),recoveryRef.path),oldRecovery);
+   await setDoc(doc(ctx.firestore(),recoveryStateRef.path),closedRecovery);
+ });
+ const nextRecovery={...round128,requestId:'2'.repeat(32),resumeFromRequestId:oldRecovery.requestId,
+   resumeFromFingerprint:closedRecovery.fingerprint,carriedCount:1,carriedSpentCents:100};
+ function recoverBatch(next=nextRecovery,archivedState=closedRecovery){
+   const batch=writeBatch(recoveryDb);
+   batch.set(recoveryArchive,{authorization:oldRecovery,state:archivedState,archivedAt:serverTimestamp()});
+   batch.set(recoveryRef,next);return batch.commit();
+ }
+ await no(setDoc(recoveryRef,nextRecovery));
+ await no(setDoc(recoveryArchive,{authorization:oldRecovery,state:closedRecovery,archivedAt:serverTimestamp()}));
+ for(const extra of [{carriedSpentCents:0},{carriedCount:0},{carriedCount:2},{budgetCents:25600},{resumeFromRequestId:'3'.repeat(32)},
+   {resumeFromFingerprint:'C'.repeat(64)},{scope:'LaLiga/2026-2027/2'}]) await no(recoverBatch({...nextRecovery,...extra}));
+ await no(recoverBatch(nextRecovery,{...closedRecovery,orders:[{...lossOrders[0],profitLossCents:100}]}));
+ await env.withSecurityRulesDisabled(async ctx=>{await updateDoc(doc(ctx.firestore(),recoveryStateRef.path),{status:'review'});});
+ await no(recoverBatch(nextRecovery,{...closedRecovery,status:'review'}));
+ await env.withSecurityRulesDisabled(async ctx=>{await updateDoc(doc(ctx.firestore(),recoveryStateRef.path),{status:'review_reconciled'});});
+ await ok(runTransaction(recoveryDb,async tx=>{
+   const previous=await tx.get(recoveryRef),state=await tx.get(recoveryStateRef);
+   tx.set(recoveryArchive,{authorization:previous.data(),state:state.data(),archivedAt:serverTimestamp()});
+   tx.set(recoveryRef,nextRecovery);
+ }));
+ await no(updateDoc(recoveryArchive,{'state.spentCents':0}));
+ const continuedRecovery={...closedRecovery,requestId:nextRecovery.requestId,fingerprint:'D'.repeat(64),terminal:false,status:'checking'};
+ for(const extra of [{reservedCount:0,orders:[],spentCents:0},{orders:[]},{spentCents:0},
+   {orders:[{...lossOrders[0],betId:'another-bet'}]}]) await no(setDoc(recoveryStateRef,{...continuedRecovery,...extra}));
+ await ok(setDoc(recoveryStateRef,continuedRecovery));
+ await no(updateDoc(recoveryStateRef,{reservedCount:0,orders:[],spentCents:0}));
+ for(let count=2;count<=7;count++) {
+   console.log(`Recovery count: ${count}`);
+   const uid=`recovery-${count}`,db=env.authenticatedContext(uid).firestore();
+   const ref=doc(db,`PuenteJornadaRonda128Real/${uid}`),sr=doc(db,`${ref.path}/Estado/actual`),ar=doc(db,`${ref.path}/Archivo/${oldRecovery.requestId}`);
+   const orders=Array.from({length:count},(_,i)=>({...lossOrders[0],betId:`bet-${i}`,cents:100<<i,matchedCents:100<<i,profitLossCents:-(100<<i)}));
+   const state={...closedRecovery,reservedCount:count,spentCents:100*((1<<count)-1),orders};
+   const next={...nextRecovery,carriedCount:count,carriedSpentCents:state.spentCents};
+   await env.withSecurityRulesDisabled(async ctx=>{
+     await setDoc(doc(ctx.firestore(),`AccesoApuestaJornada/${uid}`),{activo:true});
+     await setDoc(doc(ctx.firestore(),ref.path),oldRecovery);await setDoc(doc(ctx.firestore(),sr.path),state);
+   });
+   const b=writeBatch(db);b.set(ar,{authorization:oldRecovery,state,archivedAt:serverTimestamp()});b.set(ref,next);
+   await ok(b.commit());
+   await ok(setDoc(sr,{...state,requestId:next.requestId,fingerprint:'E'.repeat(64),terminal:false,status:'checking'}));
+ }
  await env.withSecurityRulesDisabled(async context => {
    await updateDoc(doc(context.firestore(),'AccesoApuestaJornada/owner'), {activo:false});
    await deleteDoc(doc(context.firestore(),`AccesoApuestaJornada/${firstUid}`));
