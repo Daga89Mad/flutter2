@@ -203,10 +203,35 @@ public sealed class LiveRoundWorker(IBridgeClient client, IResultsProvider provi
             if (matching.Count == 0) { incomplete = true; order["status"] = "unconfirmed"; continue; }
             if (matching.Count != 1) return await Save("review", "Varias apuestas coinciden con una orden. Revisión manual; no se duplica.", true);
             var b = matching[0];
-            if (b.Placed < J.Time(order["reservedAt"]).AddSeconds(-1) || b.Placed >= leg.Kickoff.AddSeconds(-60) ||
-                b.Matched != cents / 100m || b.Unmatched != 0 || b.AveragePrice < 2.8m || b.AveragePrice > 20 ||
-                (i > 0 && J.Optional(J.Object(orders[0])["strategyId"]) is string strategyId && b.StrategyId != strategyId))
-                return await Save("review", "Importe parcial, cuota, fecha o estrategia incoherentes. No se continúa.", true);
+            var expectedAmount = cents / 100m;
+            var reservedAt = J.Time(order["reservedAt"]);
+            var cutoff = leg.Kickoff.AddSeconds(-60);
+            var inconsistencies = new List<string>();
+            if (b.Placed < reservedAt.AddSeconds(-1)) inconsistencies.Add($"colocada {J.Iso(b.Placed)} antes de reserva {J.Iso(reservedAt)}");
+            if (b.Placed >= cutoff) inconsistencies.Add($"colocada {J.Iso(b.Placed)} fuera de plazo {J.Iso(cutoff)}");
+            if (b.Matched > expectedAmount || b.Matched + b.Unmatched > expectedAmount)
+                inconsistencies.Add($"importe correspondido {b.Matched} EUR + pendiente {b.Unmatched} EUR supera {expectedAmount} EUR");
+            if (b.Matched > 0 && (b.AveragePrice < 2.8m || b.AveragePrice > 20))
+                inconsistencies.Add($"cuota correspondida {b.AveragePrice} fuera de 2,80–20");
+            if (i > 0 && J.Optional(J.Object(orders[0])["strategyId"]) is string strategyId && b.StrategyId != strategyId)
+                inconsistencies.Add($"estrategia {b.StrategyId} distinta de {strategyId}");
+            if (inconsistencies.Count > 0)
+                return await Save("review", $"BetId {b.Id}: {string.Join("; ", inconsistencies)}. No se continúa.", true);
+            if (b.Matched != expectedAmount || b.Unmatched != 0)
+            {
+                // BF Bot puede guardar una orden antes de completar la correspondencia.
+                // Se conserva la reserva y se espera; nunca se reenvía ni se progresa.
+                if (!b.Terminal && b.Status is "PENDING" or "UNMATCHED" or "MATCHED" or "PARTIALLY_MATCHED")
+                {
+                    order["betId"] = b.Id;
+                    order["strategyId"] = b.StrategyId;
+                    order["matchedCents"] = (int)(b.Matched * 100);
+                    order["status"] = "awaiting_match";
+                    incomplete = true;
+                    continue;
+                }
+                return await Save("review", $"BetId {b.Id}: importe final correspondido {b.Matched} EUR, pendiente {b.Unmatched} EUR; se esperaban {expectedAmount} EUR completos. No se continúa.", true);
+            }
             order["betId"] = b.Id; order["strategyId"] = b.StrategyId; order["matchedCents"] = (int)(b.Matched * 100);
             order["odds"] = (double)b.AveragePrice; order["profitLossCents"] = (int)decimal.Round(b.ProfitLoss * 100);
             order["status"] = b.Status; order["settledAt"] = b.Settled is null ? null : J.Iso(b.Settled.Value);

@@ -114,9 +114,39 @@ static class RoundTests
         Check(J.Text((await winWorker.TickAsync(default))["status"]) == "won", "ganancia liquidada detiene la ronda");
         time = start.AddHours(3); Check(J.Int((await winWorker.TickAsync(default))["reservedCount"]) == 1, "empate ganador impide segunda apuesta");
         bets.Clear(); History(); time = start;
+        var fillingClient = new RoundClient(Raw(), Fixtures()); var pendingWorker = Worker(fillingClient, "pending-match");
+        await pendingWorker.TickAsync(default);
+        File.Delete(pendingWorker.OutboxPath);
+        var filling = HistoryBet(0, 0, start, start.AddHours(2), 0);
+        filling.Element("Status")!.Value = "UNMATCHED";
+        filling.Element("Unmatched")!.Value = "1";
+        filling.Element("AvgPrice")!.Value = "0";
+        filling.Element("SettledDate")!.Value = "0001-01-01T00:00:00";
+        bets.Add(filling); History();
+        var pendingState = await pendingWorker.TickAsync(default);
+        Check(J.Text(pendingState["status"]) == "awaiting_history" && !J.Bool(pendingState["terminal"]), "orden todavía sin corresponder espera sin detener definitivamente");
+        Check(J.Int(pendingState["reservedCount"]) == 1 && !File.Exists(pendingWorker.OutboxPath), "orden pendiente no repite CSV ni aumenta reserva");
+        filling.Element("Status")!.Value = "MATCHED"; filling.Element("Matched")!.Value = "0.4";
+        filling.Element("Unmatched")!.Value = "0.6"; filling.Element("AvgPrice")!.Value = "3.25"; History();
+        pendingState = await Worker(fillingClient, "pending-match").TickAsync(default);
+        Check(J.Text(pendingState["status"]) == "awaiting_history" && !J.Bool(pendingState["terminal"]) && J.Int(pendingState["reservedCount"]) == 1,
+            "correspondencia parcial en curso sobrevive a reinicio sin progresar");
+        bets.Clear(); bets.Add(HistoryBet(0, 1, start, start.AddHours(2), -1)); History();
+        time = start.AddHours(2); fillingClient.Fixtures[0] = fillingClient.Fixtures[0] with { Finished = true, HomeGoals = 1, AwayGoals = 0 };
+        Check(J.Text((await pendingWorker.TickAsync(default))["status"]) == "confirming", "tras completar y liquidar espera segunda lectura");
+        time = time.AddSeconds(16);
+        Check(J.Text((await pendingWorker.TickAsync(default))["status"]) == "waiting", "sólo prosigue tras pérdida completa y estable");
+        time = start.AddHours(3);
+        Check(J.Text((await pendingWorker.TickAsync(default))["status"]) == "exported" && File.ReadAllText(pendingWorker.OutboxPath).Contains("\"2.00\""),
+            "primera lectura pendiente no impide segundo escalón válido de 2 EUR");
+        bets.Clear(); History(); time = start;
         var partial = new RoundClient(Raw(), Fixtures()); var pw = Worker(partial, "partial"); await pw.TickAsync(default);
         bets.Add(HistoryBet(0, 0.5m, start, start.AddHours(2), -0.5m)); History(); time = start.AddHours(2);
         Check(J.Text((await pw.TickAsync(default))["status"]) == "review" && J.Int(partial.State!.Data["reservedCount"]) == 1, "correspondencia parcial bloquea progresión");
+        bets.Clear(); bets.Add(HistoryBet(0, 1, start, time, -1)); History();
+        var stillReview = await pw.TickAsync(default);
+        Check(J.Text(stillReview["status"]) == "review" && J.Bool(stillReview["terminal"]) && J.Int(stillReview["reservedCount"]) == 1,
+            "una revisión terminal previa nunca se rearma automáticamente al corregirse el historial");
         bets.Clear(); History(); time = start;
         var duplicateClient = new RoundClient(Raw(), Fixtures()); var dw = Worker(duplicateClient, "duplicate"); await dw.TickAsync(default);
         bets.Add(HistoryBet(0, 1, start, start.AddHours(2), -1)); var second = HistoryBet(0, 1, start, start.AddHours(2), -1); second.Element("BetId")!.Value = "another"; bets.Add(second); History(); time = start.AddHours(2);
