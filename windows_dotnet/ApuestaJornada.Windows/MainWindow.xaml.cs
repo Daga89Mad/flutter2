@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private Task? running;
     private bool closing, canClose;
     private bool reconcileRequested;
+    private readonly SemaphoreSlim wakeRound = new(0, 1);
     private bool liveMode, roundMode, readOnlyRound;
     private string historyFile = "";
     private string strategyFile = "";
@@ -95,6 +96,7 @@ public partial class MainWindow : Window
                 Status.Text = "Sesión iniciada. Esperando el OK del móvil…";
                 while (!ct.IsCancellationRequested)
                 {
+                    var delay = roundMode ? LiveRoundWorker.PollInterval : TimeSpan.FromSeconds(15);
                     try
                     {
                         // Persistencia y JSON fuera del hilo de la interfaz.
@@ -116,6 +118,11 @@ public partial class MainWindow : Window
                         LastSeen.Text = "Última confirmación: " + DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss");
                         if (roundMode)
                         {
+                            if (roundWorker.NextDispatchCheck is { } dispatch)
+                            {
+                                var untilDispatch = dispatch - DateTimeOffset.UtcNow;
+                                if (untilDispatch < delay) delay = untilDispatch > TimeSpan.Zero ? untilDispatch : TimeSpan.Zero;
+                            }
                             Round.Text = $"RONDA REAL · máximo por apuesta 128 € · total 255 € · Estado: {J.Optional(state["status"])}";
                             History.ItemsSource = (state["orders"] as JsonArray ?? []).Select(n => J.Object(n)).Select(o => new
                             { Match = J.Text(o["matchId"]), Amount = $"{J.Int(o["cents"]) / 100.0:0.00} €", Odds = J.Optional(o["status"]) }).ToList();
@@ -139,7 +146,8 @@ public partial class MainWindow : Window
                         Status.Text = "En espera. No se envían nuevas órdenes: " + Friendly(error);
                         LastSeen.Text = "Sin confirmar un estado nuevo; comprueba conexión y permisos.";
                     }
-                    await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                    if (roundMode) await wakeRound.WaitAsync(delay, ct);
+                    else await Task.Delay(delay, ct);
                 }
             }
         }
@@ -159,7 +167,8 @@ public partial class MainWindow : Window
         if (MessageBox.Show("Se comprobarán las apuestas ya reservadas en dos lecturas. Sólo pérdidas completas y liquidadas permitirán preparar un nuevo OK en el móvil, conservando el gasto y la progresión. No se publicarán órdenes. Mantén la estrategia de BF Bot pausada durante la recuperación.",
             "Conciliar revisión sin enviar apuestas", MessageBoxButton.OKCancel, MessageBoxImage.Information) != MessageBoxResult.OK) return;
         reconcileRequested = true; Reconcile.IsEnabled = false;
-        Status.Text = "Conciliación solicitada. Esperando al siguiente ciclo; no se envían órdenes.";
+        Status.Text = "Conciliación solicitada. No se envían órdenes.";
+        if (wakeRound.CurrentCount == 0) wakeRound.Release();
     }
 
     private void Stop_Click(object sender, RoutedEventArgs e)

@@ -49,6 +49,10 @@ public sealed record LiveRoundCommand(string Id, string Scope, DateTimeOffset Ap
             legs.Zip(legs.Skip(1)).Any(p => p.Second.Kickoff - p.First.Kickoff < TimeSpan.FromMinutes(120)) ||
             expires != legs[^1].Kickoff.AddSeconds(-60) || expires - approved > TimeSpan.FromDays(4))
             throw new InvalidDataException("Revisa equipos, IDs, orden, solapamientos o caducidad de la prueba.");
+        if (d.ContainsKey("kickoffTimes") &&
+            (d["kickoffTimes"] is not JsonArray times || times.Count != legs.Count ||
+             !times.Select(J.Time).SequenceEqual(legs.Select(l => l.Kickoff))))
+            throw new InvalidDataException("Los plazos de cancelación no coinciden con el calendario autorizado.");
         var years = scope.Split('/')[1].Split('-');
         if (int.Parse(years[1], CultureInfo.InvariantCulture) != int.Parse(years[0], CultureInfo.InvariantCulture) + 1)
             throw new InvalidDataException("Temporada inválida.");
@@ -93,6 +97,9 @@ public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvid
     string strategyPath, string historyPath, bool readOnly = true, string? legacyPilotPath = null, Func<DateTimeOffset>? clock = null)
 {
     private DateTimeOffset Now => clock?.Invoke() ?? DateTimeOffset.UtcNow;
+    public static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(7);
+    public DateTimeOffset? NextDispatchCheck { get; private set; }
     public string OutboxPath => Path.Combine(folder, "EmpatesJornadaRonda128.csv");
     private string ReceiptPath => Path.Combine(folder, "round-receipt.json");
     private void Persist(JsonObject state)
@@ -137,6 +144,8 @@ public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvid
 
     public async Task<JsonObject> TickAsync(CancellationToken ct)
     {
+        NextDispatchCheck = null;
+        DateTimeOffset? nextKickoff = null;
         Directory.CreateDirectory(folder);
         var history = BfHistory.Read(historyPath); // Un archivo ausente, incompleto o ilegible bloquea cualquier envío.
         var command = await client.GetAsync(client.CommandPath, ct);
@@ -145,14 +154,23 @@ public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvid
         { ["mode"] = "live-round-128-v1", ["requestId"] = "", ["fingerprint"] = "", ["reservedCount"] = 0, ["orders"] = new JsonArray(), ["terminal"] = false };
         if (J.Optional(state["agentId"]) is string other && other != agentId && state["leaseUntil"] is not null && J.Time(state["leaseUntil"]) > Now)
             throw new InvalidOperationException("Otro PC controla esta prueba.");
-        state["agentId"] = agentId; state["lastSeenAt"] = J.Iso(Now); state["leaseUntil"] = J.Iso(Now.AddSeconds(60));
+        state["agentId"] = agentId; state["lastSeenAt"] = J.Iso(Now); state["leaseUntil"] = J.Iso(Now.Add(LeaseDuration));
         var version = old?.Version;
         async Task<JsonObject> Save(string status, string message, bool terminal = false)
         {
             state["status"] = status; state["message"] = message; state["terminal"] = J.Bool(state["terminal"]) || terminal;
-            state["lastSeenAt"] = J.Iso(Now); state["leaseUntil"] = J.Iso(Now.AddSeconds(60));
+            state["lastSeenAt"] = J.Iso(Now); state["leaseUntil"] = J.Iso(Now.Add(LeaseDuration));
             version = await client.PatchAsync(client.StatePath, state, version, version is null, ct);
             if (J.Int(state["reservedCount"]) > 0) Persist(state);
+            if (!readOnly && !J.Bool(state["terminal"]) && nextKickoff is { } kickoff)
+            {
+                var now = Now;
+                var opens = kickoff.AddMinutes(-5);
+                // Comprueba al abrir la ventana y deja una segunda oportunidad
+                // antes del cierre si faltaban resultados o la liquidación.
+                var lastCheck = kickoff.AddMinutes(-2);
+                NextDispatchCheck = now < opens ? opens : now < lastCheck ? lastCheck : null;
+            }
             return state;
         }
         if (old is null) await Save("checking", "Conectado: comprobando la autorización y el historial.");
@@ -186,7 +204,7 @@ public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvid
             state = new JsonObject { ["mode"] = "live-round-128-v1", ["requestId"] = c.Id,
                 ["fingerprint"] = c.Fingerprint, ["reservedCount"] = 0, ["orders"] = new JsonArray(),
                 ["terminal"] = false, ["spentCents"] = 0, ["agentId"] = agentId,
-                ["lastSeenAt"] = J.Iso(Now), ["leaseUntil"] = J.Iso(Now.AddSeconds(60)) };
+                ["lastSeenAt"] = J.Iso(Now), ["leaseUntil"] = J.Iso(Now.Add(LeaseDuration)) };
             await Save("checking", "Nuevo OK recibido; ronda anterior archivada sin órdenes. Comprobando partidos restantes.");
             }
         }
@@ -197,6 +215,7 @@ public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvid
         var orders = state["orders"] as JsonArray ?? throw new InvalidDataException("Historial remoto inválido.");
         var reserved = J.Int(state["reservedCount"]);
         if (reserved != orders.Count || reserved < 0 || reserved > c.Legs.Count) throw new InvalidDataException("Reservas remotas incoherentes.");
+        nextKickoff = reserved < c.Legs.Count ? c.Legs[reserved].Kickoff : null;
         if (File.Exists(ReceiptPath))
         {
             var local = J.Object(JsonNode.Parse(File.ReadAllText(ReceiptPath)));
@@ -306,6 +325,7 @@ public sealed partial class LiveRoundWorker(IBridgeClient client, IResultsProvid
         orders.Add(new JsonObject { ["matchId"] = next.MatchId, ["marketId"] = next.MarketId,
             ["cents"] = nextCents, ["reservedAt"] = J.Iso(Now), ["status"] = "reserved" });
         state["reservedCount"] = reserved + 1; state["spentCents"] = spent + nextCents;
+        nextKickoff = reserved + 1 < c.Legs.Count ? c.Legs[reserved + 1].Kickoff : null;
         await Save("reserved", "Orden reservada; publicación todavía sin confirmar.");
         fixtures = await provider.EnrichAsync(c.Scope, await client.FixturesAsync(c.Scope, ct), Now, ct); c.CheckSchedule(fixtures);
         current = await client.GetAsync(client.CommandPath, ct);

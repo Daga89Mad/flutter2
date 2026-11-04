@@ -198,6 +198,29 @@ try {
  await no(setDoc(round128State,{...rs128,requestId:round128.requestId}));
  await ok(updateDoc(round128State,{reservedCount:1,orders:[{cents:100}],spentCents:100}));
  await no(updateDoc(round128State,{reservedCount:0,orders:[],spentCents:0}));
+ // La revocación usa el reloj de Firestore y el siguiente partido sin reserva.
+ for (const [uid, minutes, withReservation, allowed] of [
+   ['cancelEarly', 11, false, true],
+   ['cancelLate', 9, false, false],
+   ['cancelNext', 9, true, true],
+ ]) {
+   const db = env.authenticatedContext(uid).firestore();
+   const ref = doc(db, `PuenteJornadaRonda128Real/${uid}`);
+   const kickoff = Date.now() + minutes * 60000;
+   const later = kickoff + 7200000;
+   const auth = {...round128, expiresAt:Timestamp.fromMillis(later-60000),
+     kickoffTimes:[Timestamp.fromMillis(kickoff),Timestamp.fromMillis(later)]};
+   await env.withSecurityRulesDisabled(async ctx=>{
+     await setDoc(doc(ctx.firestore(),`AccesoApuestaJornada/${uid}`),{activo:true});
+   });
+   await ok(setDoc(ref,auth));
+   if (withReservation) {
+     const stateRef = doc(db, ref.path + '/Estado/actual');
+     await ok(setDoc(stateRef,rs128));
+     await ok(updateDoc(stateRef,{reservedCount:1,orders:[{cents:100}]}));
+   }
+   await (allowed ? ok : no)(updateDoc(ref,{action:'revoke',updatedAt:serverTimestamp()}));
+ }
  // Recuperación con pérdidas: archivo atómico y continuidad de gasto/reservas.
  const recoveryDb=env.authenticatedContext('recovery').firestore();
  const recoveryRef=doc(recoveryDb,'PuenteJornadaRonda128Real/recovery');
