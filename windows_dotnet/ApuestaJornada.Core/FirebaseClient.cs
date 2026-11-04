@@ -43,7 +43,9 @@ public sealed class FirebaseClient : IBridgeClient, IDisposable
             {
                 var message = data?["error"] is JsonObject e ? J.Optional(e["message"]) : null;
                 message ??= "Solicitud rechazada. Comprueba conexión, cuenta y reglas de Firebase.";
-                throw new ApiException((int)response.StatusCode, message[..Math.Min(message.Length, 240)]);
+                var host = response.RequestMessage?.RequestUri?.Host;
+                var origin = string.IsNullOrEmpty(host) ? "" : $" [{host}]";
+                throw new ApiException((int)response.StatusCode, message[..Math.Min(message.Length, 240)] + origin);
             }
             return data ?? throw new InvalidDataException("Respuesta del servidor no válida.");
         }

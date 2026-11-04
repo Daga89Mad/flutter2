@@ -162,6 +162,10 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
         'Elige entre uno y ${8 - carriedCount} partidos futuros; se conservan las apuestas anteriores.',
       );
     }
+    if (legs.first.kickoff!.difference(DateTime.now()) <
+        const Duration(minutes: 10)) {
+      throw StateError('Confirma el OK al menos 10 minutos antes del primer partido pendiente.');
+    }
     for (var i = 0; i < legs.length; i++) {
       final m = legs[i];
       if (i > 0 &&
@@ -384,6 +388,9 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           'fromNow': true,
           'schedule': schedule,
           'legs': payload,
+          'kickoffTimes': (jsonDecode(payload) as List)
+              .map((row) => Timestamp.fromDate(DateTime.parse((row as List)[3] as String)))
+              .toList(),
           'baselineFinishedIds': baseline.toList(),
           if (carriedCount > 0) ...{
             'resumeFromRequestId': replacingRequestId,
@@ -564,12 +571,58 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
     }
   }
 
-  Future<void> revoke() async {
-    setState(() => busy = true);
+  DateTime? cancellationDeadline(
+    Map<String, dynamic> authorization,
+    Map<String, dynamic>? state,
+  ) {
+    if (authorization['action'] != 'authorize') return null;
+    final sameRound = state?['requestId'] == authorization['requestId'];
+    if (sameRound && state?['terminal'] == true) return null;
+    final index = (sameRound ? state?['reservedCount'] as int? : null) ??
+        (authorization['carriedCount'] as int?) ??
+        0;
     try {
-      await command.update({
-        'action': 'revoke',
-        'updatedAt': FieldValue.serverTimestamp(),
+      final legs = jsonDecode(authorization['legs'] as String) as List;
+      if (index < 0 || index >= legs.length) return null;
+      final row = legs[index] as List;
+      return DateTime.parse(row[3] as String).subtract(const Duration(minutes: 10));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget cancellationControl(
+    Map<String, dynamic> authorization,
+    Map<String, dynamic>? state,
+  ) {
+    if (authorization['action'] == 'revoke') return const Text('OK revocado.');
+    final deadline = cancellationDeadline(authorization, state);
+    if (deadline == null) return const SizedBox.shrink();
+    return TextButton(
+      onPressed: busy || DateTime.now().isAfter(deadline)
+          ? null
+          : () => revoke(authorization['requestId'] as String),
+      child: Text('Revocar siguientes envíos · hasta ${deadline.toLocal()}'),
+    );
+  }
+
+  Future<void> revoke(String requestId) async {
+    setState(() { busy = true; error = null; });
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final current = (await tx.get(command)).data();
+        final state = (await tx.get(command.collection('Estado').doc('actual'))).data();
+        if (current == null || current['requestId'] != requestId) {
+          throw StateError('El OK cambió. Revisa la autorización actual.');
+        }
+        final deadline = cancellationDeadline(current, state);
+        if (deadline == null || DateTime.now().isAfter(deadline)) {
+          throw StateError('El OK sólo se puede revocar hasta 10 minutos antes del próximo partido pendiente.');
+        }
+        tx.update(command, {
+          'action': 'revoke',
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
       });
     } catch (e) {
       if (mounted) setState(() => error = '$e');
@@ -591,7 +644,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const Text(
-          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Recuperación 0.7.7.',
+          'Elige un partido por grupo horario. Si son simultáneos, elige cuál antes del OK. El presupuesto continúa el lunes. Versión 0.7.8.',
         ),
         StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
@@ -645,8 +698,15 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                       if (state.hasError)
                         return Text('No se pudo leer el PC: ${state.error}');
                       final s = state.data?.data();
-                      if (s == null || s['requestId'] != d['requestId'])
-                        return const Text('Esperando confirmación del PC.');
+                      if (s == null || s['requestId'] != d['requestId']) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Esperando confirmación del PC.'),
+                            cancellationControl(d, s),
+                          ],
+                        );
+                      }
                       final orders = (s['orders'] as List<dynamic>?) ?? [];
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -672,6 +732,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                                 'Revisar partidos futuros · conservar pérdida · siguiente ${1 << (s!['reservedCount'] as int)} €',
                               ),
                             ),
+                          cancellationControl(d, s),
                           ...orders.map(
                             (o) => ListTile(
                               title: Text(
@@ -687,10 +748,7 @@ class _RoundRealState extends State<ApuestaJornadaRondaRealScreen> {
                       );
                     },
                   ),
-                  TextButton(
-                    onPressed: busy ? null : revoke,
-                    child: const Text('Revocar siguientes envíos'),
-                  ),
+                  if (error != null) Text(error!),
                   const Text(
                     'Revocar o detener Windows no cancela apuestas ya importadas. Revisa lo pendiente en BF Bot Manager.',
                   ),

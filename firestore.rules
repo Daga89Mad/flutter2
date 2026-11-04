@@ -387,7 +387,7 @@ service cloud.firestore {
 
     // Ronda REAL independiente: una autorización por cuenta, máximo ocho reservas, 128 EUR por apuesta y 255 EUR acumulados.
     function validLiveRound128(d) {
-      return d.keys().hasOnly(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds','resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents'])
+      return d.keys().hasOnly(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds','resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents','kickoffTimes'])
         && d.keys().hasAll(['schema','mode','requestId','action','scope','approvedAt','updatedAt','expiresAt','currency','budgetCents','maxStakeCents','maxBets','minPrice','maxPrice','excludeBigThree','marketConfirmed','fromNow','schedule','legs','baselineFinishedIds'])
         && ((!d.keys().hasAny(['resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents'])) || (d.keys().hasAll(['resumeFromRequestId','resumeFromFingerprint','carriedCount','carriedSpentCents'])
           && d.resumeFromRequestId is string && d.resumeFromRequestId.matches('^[a-f0-9]{32}$')
@@ -402,6 +402,10 @@ service cloud.firestore {
         && d.marketConfirmed == true && d.fromNow == true
         && d.schedule is string && d.schedule.size() > 0 && d.schedule.size() < 20000
         && d.legs is string && d.legs.size() > 0 && d.legs.size() < 8000
+        && (!('kickoffTimes' in d) || (d.kickoffTimes is list
+          && d.kickoffTimes.size() > d.get('carriedCount', 0) && d.kickoffTimes.size() <= 8
+          && d.kickoffTimes[d.kickoffTimes.size() - 1] is timestamp
+          && d.kickoffTimes[d.kickoffTimes.size() - 1] == d.expiresAt + duration.value(60, 's')))
         && d.baselineFinishedIds is list && d.baselineFinishedIds.size() <= 9
         && d.baselineFinishedIds.toSet().size() == d.baselineFinishedIds.size()
         && d.approvedAt == request.time && d.updatedAt == request.time
@@ -447,7 +451,20 @@ service cloud.firestore {
       allow read: if isOwner(uid) && jornadaAutorizada();
       allow create: if isOwner(uid) && jornadaAutorizada() && validLiveRound128(request.resource.data)
         && !request.resource.data.keys().hasAny(['carriedCount']);
+      function withinCancellationWindow(d) {
+        let path = /databases/$(database)/documents/PuenteJornadaRonda128Real/$(uid)/Estado/actual;
+        let state = exists(path) ? previousState() : {};
+        let sameRound = state.get('requestId', '') == d.requestId;
+        let index = sameRound ? state.reservedCount : d.get('carriedCount', 0);
+        return (!sameRound || !state.terminal)
+          && index >= 0 && index < d.kickoffTimes.size()
+          && d.kickoffTimes[index] is timestamp
+          && request.time <= d.kickoffTimes[index] - duration.value(10, 'm');
+      }
       allow update: if isOwner(uid) && request.resource.data.action == 'revoke'
+        && resource.data.action == 'authorize'
+        // Los OK antiguos siguen siendo revocables mientras se migra el móvil.
+        && (!('kickoffTimes' in resource.data) || withinCancellationWindow(resource.data))
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['action','updatedAt']);
       // El lote conserva el OK y el estado íntegros; los importes nunca vuelven a cero.
